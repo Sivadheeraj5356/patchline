@@ -13,6 +13,23 @@ export function leafName(fieldPath) {
   return fieldPath.replace(/\[\]/g, '').split('.').pop();
 }
 
+function endpointContext(changePath) {
+  // "GET /v2/invoices/{id}" -> "/invoices/" (normalized, no version prefix, no params)
+  if (!changePath) return null;
+  const p = changePath.includes(' ') ? changePath.split(' ')[1] : changePath;
+  if (!p) return null;
+  return normalizePath(p).replace(/\{[^}]+\}/g, '') || null;
+}
+
+// Paths this file actually calls, among the endpoints involved in the change set.
+// A file mentioning specific endpoints should only match their field/param changes;
+// a file mentioning none stays eligible (honest uncertainty beats a false clean).
+function fileEndpointSet(content, allPaths) {
+  const found = new Set();
+  for (const p of allPaths) if (p && content.includes(p)) found.add(p);
+  return found;
+}
+
 export function flattenSpec(spec) {
   const out = new Map();
   const paths = spec.paths || {};
@@ -241,11 +258,18 @@ export function diffSpecs(oldSpec, newSpec) {
 export function scanConsumer(files, changes) {
   // files: [{name, content}]. Find lines affected by each breaking change.
   const usages = [];
+  const seen = new Set();
   const breaking = changes.filter((c) => c.kind === 'breaking');
+  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
+    const fileEps = fileEndpointSet(f.content, allPaths);
     const lines = f.content.split('\n');
     lines.forEach((text, i) => {
       for (const c of breaking) {
+        // cross-endpoint guard: field/param/enum changes only apply to files
+        // that call that endpoint (or call no known endpoint at all)
+        const ctx = endpointContext(c.endpoint);
+        if (ctx && fileEps.size > 0 && !fileEps.has(ctx) && c.type !== 'endpoint_removed' && c.type !== 'base_path_changed' && !c.type.startsWith('security')) continue;
         let hit = false;
         if (c.type === 'endpoint_removed' || c.type === 'base_path_changed') {
           const p = (c.endpoint.split(' ')[1] || '').replace(/\{[^}]+\}/g, '');
@@ -261,7 +285,10 @@ export function scanConsumer(files, changes) {
         if (c.type === 'enum_value_removed') {
           if (new RegExp(`['"\`]${c.from}['"\`]`).test(text)) hit = true;
         }
-        if (hit) usages.push({ file: f.name, line: i + 1, text: text.trimEnd(), change: c });
+        if (hit) {
+          const key = `${f.name}:${i + 1}:${c.type}:${c.from}`;
+          if (!seen.has(key)) { seen.add(key); usages.push({ file: f.name, line: i + 1, text: text.trimEnd(), change: c }); }
+        }
       }
     });
   }
@@ -274,10 +301,17 @@ export function buildFixes(files, changes, opts = {}) {
   const breaking = changes.filter((c) => c.kind === 'breaking');
   const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
   const fixes = [];
+  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
+    const fileEps = fileEndpointSet(f.content, allPaths);
+    const inScope = (c) => {
+      const ctx = endpointContext(c.endpoint);
+      return !ctx || fileEps.size === 0 || fileEps.has(ctx) || c.type === 'endpoint_removed' || c.type === 'base_path_changed' || c.type.startsWith('security');
+    };
     const lines = f.content.split('\n');
     const edits = [];
     const suggested = [];
+    const seenSug = new Set();
     lines.forEach((text, i) => {
       // Never auto-edit a line that calls a removed endpoint; manual review owns it.
       if (removedPaths.some((p) => p && text.includes(p))) return;
@@ -296,8 +330,10 @@ export function buildFixes(files, changes, opts = {}) {
           const re = new RegExp(`\\b${fromLeaf}\\b`, 'g');
           if (re.test(after)) {
             const replaced = after.replace(re, toLeaf);
-            if (c.inferred && !opts.applyInferred) {
-              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred rename ${fromLeaf} -> ${toLeaf}`], reason: c.migration });
+            if (!inScope(c)) { /* different endpoint - leave this line alone */ }
+            else if (c.inferred && !opts.applyInferred) {
+              const skey = `${i + 1}:${replaced}`;
+              if (!seenSug.has(skey)) { seenSug.add(skey); suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred rename ${fromLeaf} -> ${toLeaf}`], reason: c.migration }); }
             } else {
               after = replaced;
               applied.push(`rename ${fromLeaf} -> ${toLeaf}${c.inferred ? ' (inferred)' : ''}`);
@@ -307,8 +343,10 @@ export function buildFixes(files, changes, opts = {}) {
           const re = new RegExp(`(['"\`])${c.from}\\1`, 'g');
           if (re.test(after)) {
             const replaced = after.replace(re, `$1${c.to}$1`);
-            if (c.inferred && !opts.applyInferred) {
-              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred enum ${c.from} -> ${c.to}`], reason: c.migration });
+            if (!inScope(c)) { /* different endpoint */ }
+            else if (c.inferred && !opts.applyInferred) {
+              const skey = `${i + 1}:${replaced}`;
+              if (!seenSug.has(skey)) { seenSug.add(skey); suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred enum ${c.from} -> ${c.to}`], reason: c.migration }); }
             } else {
               after = replaced;
               applied.push(`enum ${c.from} -> ${c.to}${c.inferred ? ' (inferred)' : ''}`);
@@ -316,7 +354,7 @@ export function buildFixes(files, changes, opts = {}) {
           }
         }
       }
-      if (applied.length) edits.push({ line: i + 1, before: text, after, applied });
+      if (applied.length && !edits.some((e) => e.line === i + 1 && e.after === after)) edits.push({ line: i + 1, before: text, after, applied });
     });
     // manual-review flags: endpoint_removed references
     const manual = [];

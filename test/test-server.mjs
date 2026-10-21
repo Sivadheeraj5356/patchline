@@ -61,10 +61,19 @@ await t('parse rejects garbage with 422-shaped error', async () => {
 });
 
 await t('analyze over URLs with consumer files returns full report', async () => {
+  // this file calls /v2/payouts only: invoice-field changes must NOT match here (cross-endpoint guard)
   const files = [{ name: 'app.js', content: "const total = inv.amount_cents / 100;\nawait api.get('/v2/payouts');\n" }];
   const r = await post('/api/analyze', { oldUrl: fixtureUrl, newText: specV2, files });
   ok(r.summary && r.summary.breaking > 5, JSON.stringify(r.summary || r));
-  ok(r.usages.length >= 2, `usages ${r.usages.length}`); // amount_cents read + removed payouts endpoint
+  ok(r.usages.length === 1 && r.usages[0].change.type === 'endpoint_removed', `usages ${JSON.stringify(r.usages.map(u=>u.change.type))}`);
+  // a file calling /v2/invoices DOES match invoice field changes; a file with no endpoint refs stays eligible
+  const files2 = [
+    { name: 'inv.js', content: "await api.get('/v2/invoices');\nconst t = inv.amount_cents / 100;\n" },
+    { name: 'util.js', content: "export const cents = (x) => x.amount_cents / 100;\n" },
+  ];
+  const r2 = await post('/api/analyze', { oldUrl: fixtureUrl, newText: specV2, files: files2 });
+  ok(r2.usages.some((u) => u.file === 'inv.js' && u.change.type === 'response_field_renamed'), 'inv.js matches invoice rename');
+  ok(r2.usages.some((u) => u.file === 'util.js' && u.change.type === 'response_field_renamed'), 'endpoint-free file stays eligible');
   ok(r.pr.includes('Acme Payments API'), 'PR markdown');
 });
 

@@ -25,6 +25,19 @@ export function walkRepo(dir, base = dir, out = []) {
 export function clonePublicRepo(url) {
   if (!/^https?:\/\//.test(url)) throw new Error('repo URL must be http(s)');
   const dir = mkdtempSync(join(tmpdir(), 'patchline-clone-'));
-  execFileSync('git', ['clone', '--depth', '1', url, dir], { stdio: 'pipe', timeout: 120000 });
+  // bounded clone: https only, no credential prompts, no submodules, redirects
+  // limited to the initial request (git's own redirect chain is outside our URL
+  // validation), no local protocol escapes, scrubbed env
+  execFileSync('git', [
+    '-c', 'http.followRedirects=initial',
+    '-c', 'protocol.file.allow=never',
+    '-c', 'protocol.ext.allow=never',
+    '-c', 'core.askpass=',
+    'clone', '--depth', '1', '--single-branch', '--no-recurse-submodules', '--no-tags', url, dir,
+  ], {
+    stdio: 'pipe',
+    timeout: 120000,
+    env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false' },
+  });
   return dir;
 }

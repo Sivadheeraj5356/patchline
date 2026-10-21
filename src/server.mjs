@@ -8,6 +8,7 @@
 import { createServer } from 'node:http';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { Agent } from 'undici';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,14 +45,26 @@ async function assertPublicUrl(rawUrl) {
   if (!['http:', 'https:'].includes(u.protocol)) throw new Error('only http(s) URLs are allowed');
   if (isIP(u.hostname)) {
     if (!ALLOW_PRIVATE && isPrivateIP(u.hostname)) throw new Error(`refusing non-public address ${u.hostname} (set PATCHLINE_ALLOW_PRIVATE=1 only for local testing)`);
-    return u;
+    return { url: u, dispatcher: undefined };
   }
   const answers = await lookup(u.hostname, { all: true });
   if (!answers.length) throw new Error(`cannot resolve ${u.hostname}`);
   for (const a of answers) {
     if (!ALLOW_PRIVATE && isPrivateIP(a.address)) throw new Error(`${u.hostname} resolves to non-public address ${a.address}; refused`);
   }
-  return u;
+  // pin the connection to the addresses we just validated: the fetch below
+  // must not re-resolve DNS (rebinding window between check and connect)
+  const pinned = answers.map((a) => ({ address: a.address, family: a.family }));
+  const dispatcher = new Agent({
+    connect: {
+      lookup: (hostname, opts, cb) => {
+        if (opts && opts.all) return cb(null, pinned);
+        const first = pinned[0];
+        return cb(null, first.address, first.family);
+      },
+    },
+  });
+  return { url: u, dispatcher };
 }
 
 for (const d of [DATA, join(DATA, 'snapshots')]) mkdirSync(d, { recursive: true });
@@ -76,8 +89,8 @@ async function fetchText(url) {
     if (meta.lastModified) headers['if-modified-since'] = meta.lastModified;
     let current = url;
     for (let hops = 0; hops <= 3; hops++) {
-      await assertPublicUrl(current);
-      const res = await fetch(current, { headers, signal: ctrl.signal, redirect: 'manual' });
+      const { dispatcher } = await assertPublicUrl(current);
+      const res = await fetch(current, { headers, signal: ctrl.signal, redirect: 'manual', dispatcher });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         current = new URL(res.headers.get('location'), current).toString();
         continue;
