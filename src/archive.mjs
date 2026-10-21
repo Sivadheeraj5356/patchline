@@ -72,9 +72,13 @@ export function extractTar(buf, { maxFiles = MAX_FILES, maxTotal = MAX_TOTAL_BYT
 
 // Fetch + unpack + filter to scannable source files. Strips the single
 // top-level archive directory GitHub adds (owner-repo-ref/).
-export async function fetchRepoArchive(repoUrl) {
+export async function fetchRepoArchive(repoUrl, { token = null } = {}) {
   const archiveUrl = archiveUrlFor(repoUrl);
-  const gz = await fetchBinary(archiveUrl, { maxBytes: MAX_ARCHIVE_BYTES });
+  // credentials attach ONLY to GitHub's own archive host - never leak a
+  // token to an arbitrary repoUrl host
+  const headers = token && new URL(archiveUrl).hostname === 'codeload.github.com'
+    ? { authorization: `Bearer ${token}` } : {};
+  const gz = await fetchBinary(archiveUrl, { maxBytes: MAX_ARCHIVE_BYTES, headers });
   if (gz.length > MAX_ARCHIVE_BYTES) throw new Error(`archive too large (${gz.length} bytes compressed)`);
   let tar;
   try { tar = gunzipSync(gz, { maxOutputLength: MAX_TOTAL_BYTES + 1 }); }
