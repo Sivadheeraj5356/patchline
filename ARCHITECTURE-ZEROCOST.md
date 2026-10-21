@@ -137,18 +137,61 @@ C. HOSTED READ-ONLY VIEWER - emulation-plausible, nothing provisioned.
    warm; handler wall time, not billed CPU). CPU-plausible for a 10ms free
    budget; no host account exists or was created.
 
-D. HOSTED INTERACTIVE PRODUCT - no verified zero-cost route today.
-   What measurement actually rules out is narrower: running the consumer
-   scan in-request on ONE runtime (a 10ms-CPU free worker; 400-file scan
-   measured ~130ms). It does NOT rule out hosted interactivity in general:
-   an architecture that offloads scans/diffs to bounded background jobs
-   (e.g. the Actions runner, dispatched on demand, results read back by the
-   viewer) could stay at zero cost without any paid host. That architecture
-   is unresearched, not promised: job dispatch latency, dispatch auth from
-   the host, and result hand-off are open questions. Honest current state:
-   no verified full-free hosted-interactive route exists as of 2026-10-22;
-   that is a gap in verification, not a proof of impossibility, and not a
-   "pay or give up" binary for the owner.
+D. HOSTED INTERACTIVE PRODUCT - offload route RESEARCHED (2026-10-22).
+   What measurement rules out is narrow: running the consumer scan
+   in-request on a 10ms-CPU free worker (400-file scan ~130ms). The
+   researched alternative keeps every heavy operation in GitHub Actions and
+   uses the free worker only as a thin proxy + static host:
+
+   Architecture: "dispatch-offload".
+   1. Cloudflare Workers free serves the UI (static asset requests are FREE
+      AND UNLIMITED on the free plan - verified on the current pricing page;
+      only dynamic API invocations count against 100k/day at 10ms CPU).
+   2. Interactive ops (ad-hoc diff, consumer scan, watch check, add watch)
+      become JOBS: the worker calls
+      POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches
+      (verified current GitHub docs: requires a fine-grained PAT with the
+      "Actions: write" repository permission; PAT tokens supported) with a
+      job payload, returns a job id, and the UI polls for the result.
+   3. A job workflow (workflow_dispatch with inputs) runs the SAME engines
+      on the Actions runner and commits the result JSON to
+      patchline-data/jobs/<id>.json. The worker reads it back via the
+      contents API (Contents: read on the same repo-scoped PAT).
+   4. Small reads keep the measured 1-3ms path (snapshot viewer). All
+      worker-side work per interactive call is 1-3 GitHub API subrequests,
+      far under the 50-subrequest and 10ms free limits.
+   5. Auth: the same shared-secret gate in front of every dynamic route.
+
+   Security scope of the ONE new credential (repo-scoped fine-grained PAT
+   with Actions:write + Contents:read on patchline only): if leaked, an
+   attacker can dispatch workflows and read this one repo/branch. Compute
+   abuse is capped by the account's Actions budget hard-blocked at $0
+   (verified on the billing budgets page 2026-10-22) - abuse stops, it
+   cannot bill. No account-level permissions; one-click revocation; expiry.
+   This is deliberately the minimum scope the dispatch API accepts.
+
+   Verified inputs (current docs/measurements, sources in repo history):
+   - Dispatch endpoint + exact permission (Actions:write, PAT supported).
+   - CF free: static free+unlimited, 100k dynamic req/day, 10ms CPU, KV
+     available. Worker proxy CPU measured 1-3ms class.
+   - Result hand-off payload: KBs per job (measured 2.5-4.1KB events).
+   - Actions $0 hard-block verified; free minutes shared across repos.
+
+   Honestly unverified (need owner activation steps to measure):
+   - Dispatch-to-result latency (pickup is seconds-to-minutes, no SLA;
+     unmeasured until a real run is allowed).
+   - Whether Cloudflare free signup asks for a card (pricing pages show
+     $0/mo free plan; signup flow itself untested - no account created).
+   - The job workflow file itself: not written. Creating it needs the
+     Workflows permission the deploy PAT no longer has - owner commits it
+     once via the GitHub web UI, or approves a temporary scope change.
+
+   Concrete activation package IF the owner wants hosted interactivity:
+   (a) create one free Cloudflare account; (b) commit one job-workflow file
+   via the GitHub web UI (or approve temporary workflow scope); (c) create
+   one repo-scoped PAT with Actions:write + Contents:read for the worker
+   secret; (d) choose the viewer auth key. Every step reversible.
+   Until then this section is a researched route, not a built one.
 
 ## State transfer (for component C) - measured payload sizes
 
