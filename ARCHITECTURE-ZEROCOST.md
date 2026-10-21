@@ -46,8 +46,8 @@ millisecond ceiling; the EXISTING engines run unmodified.
 - Minutes budget: heavy use beyond hourly checks could exhaust the 2,000
   free minutes; the workflow has a 10-minute timeout and concurrency guard.
 - Results surface as commits on the patchline-data branch and the Actions
-  log - not a live web UI. A hosted read UI would need either a public repo
-  (GitHub Pages, not approved) or a free Cloudflare signup (owner decision).
+  log - not a live web UI. A hosted read UI is a separate, still-unverified
+  design question; see "Hosted read UI - candidate design (unverified)".
 - Spec size: unbounded on Actions (no 10ms limit), unlike a Workers port.
 
 ## Explicitly NOT done
@@ -57,3 +57,48 @@ millisecond ceiling; the EXISTING engines run unmodified.
   server-side scanning - outside the $0 decision.
 - No Render/Railway/Fly: sleep/ephemeral/paid issues documented earlier.
 - No public publish; repo stays private until the owner chooses otherwise.
+
+## Hosted read UI - candidate design (target-level, NOT yet verified)
+
+Status: design-stage. Nothing below is provisioned or measured end-to-end.
+Recorded so the investigation continues from verified constraints instead of
+signup choices.
+
+Verified inputs to the design:
+- All heavy compute (spec fetch, diff, consumer scan) is already isolated in
+  the Actions runner and does not need to move. Its output is plain JSON on
+  the patchline-data branch.
+- Measured CPU (this machine, same engines): 17KB spec diff ~3ms; 121KB spec
+  ~7-11ms; 400-file consumer scan ~130ms. Serving static UI + JSON reads is
+  ~1-3ms of work per request by construction (no scan on the read path).
+- The account's Actions budget is hard-blocked at $0 (verified on the billing
+  budgets page 2026-10-22): exceeding free minutes stops runs, never bills.
+- The auth gate (shared secret, timing-safe compare, sessionStorage unlock
+  overlay) is implemented and test-covered; it ports 1:1 to any thin host.
+
+Candidate shape ("read-through worker", no scan on the host):
+1. Actions workflow (already built) remains the only writer of watch state.
+2. A thin read host serves the existing UI assets plus a tiny JSON endpoint
+   that returns the latest precomputed state (events, diffs, impact) that the
+   Actions run produced. No spec fetching, no diffing, no scanning on the
+   host - so host CPU stays in the 1-3ms band measured above.
+3. Auth: same shared-secret gate in front of every route.
+4. State transfer options (to be measured, not chosen yet):
+   a. Host reads the patchline-data branch through the pinned fetch path
+      (needs a read credential - adds a secret; least preferred).
+   b. Actions pushes the rendered state JSON to the host's store at the end
+      of each run (push model; no read credential on the host).
+   c. Static export mode: the server gains an export command that renders
+      state to static files; the host serves those files verbatim.
+
+What remains unverified (do not present as decided):
+- Whether any specific free host's CPU/quota fits this shape in practice -
+  needs local emulation measurement first (free, no account), then an owner
+  decision before any account is created anywhere.
+- State-transfer option (a/b/c) - needs measurement of payload sizes and
+  freshness requirements.
+- Custom domain/TLS and whether the user's profile link should point at a
+  hosted demo at all (user decision, gated on product completion).
+
+Next unblocked step: local emulation measurement of the read path (1-3ms
+band) on a candidate free-host runtime, without creating any account.
