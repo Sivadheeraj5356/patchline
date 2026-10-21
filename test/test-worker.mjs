@@ -114,6 +114,19 @@ t('unknown job id -> 404', j.status === 404);
   t('no gate key in any response body', !all.includes('test-key'));
 }
 
+// snapshot privacy: baked state is gated; the open UI shell carries none
+{
+  const kv = await mf.getKVNamespace('JOBS');
+  await kv.put('snapshot:index.html', '<html><body>PRIVATE-WATCH-URLS</body></html>');
+  let rr = await mf.dispatchFetch('http://x/snapshot');
+  t('snapshot without key -> 401', rr.status === 401);
+  rr = await mf.dispatchFetch('http://x/snapshot', { headers: H });
+  t('snapshot with key -> 200', rr.status === 200 && (await rr.text()).includes('PRIVATE-WATCH-URLS'));
+  rr = await mf.dispatchFetch('http://x/');
+  const shell = await rr.text();
+  t('open UI shell has no baked snapshot', !shell.includes('window.__PATCHLINE_STATIC__ = {') && !shell.includes('PRIVATE-WATCH-URLS'));
+}
+
 ghMock.close();
 await mf.dispose();
 console.log(`${pass} passed, ${fail} failed`);

@@ -24,7 +24,7 @@ const snap = {
 let html = readFileSync(join(root, 'ui/index.html'), 'utf8');
 const inject = `<script>window.__PATCHLINE_STATIC__ = ${JSON.stringify(snap).replace(/</g, '\\u003c')};</script>`;
 if (!html.includes('</head>')) throw new Error('no </head> in ui/index.html');
-html = html.replace('</head>', inject + '\n</head>');
+html = html.replace('</head>', inject + '\n<meta name="robots" content="noindex,nofollow">\n<!-- PRIVATE: contains the owner\'s watch/event state. Serve ONLY behind the Patchline access gate, never as a public static asset. -->\n</head>');
 // Read-only banner under the header
 html = html.replace('<div class="wrap">', `<div class="wrap">\n<div style="margin:12px 0;padding:10px 14px;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#9da7b3;font-size:13px;">Static snapshot exported ${snap.exportedAt} - read-only. Adding watches, running checks and ad-hoc analysis need the local server (<code>npm start</code>).</div>`);
 

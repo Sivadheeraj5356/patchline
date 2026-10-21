@@ -65,6 +65,18 @@ export default {
     }
     if (p === '/api/health') return json(200, { ok: true, hosted: true });
 
+    // The static snapshot (baked private state) is served ONLY behind the
+    // gate, from KV (written at deploy time). The openly served UI shell
+    // above never contains baked state.
+    if (p === '/snapshot') {
+      if (!eq(request.headers.get('x-patchline-key'), env.PATCHLINE_AUTH_KEY)) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const html = await env.JOBS.get('snapshot:index.html');
+      if (!html) return json(404, { error: 'no snapshot published yet' });
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'x-robots-tag': 'noindex' } });
+    }
+
     // every other /api route is behind the shared-secret gate
     if (!eq(request.headers.get('x-patchline-key'), env.PATCHLINE_AUTH_KEY)) {
       return json(401, { error: 'unauthorized' });
