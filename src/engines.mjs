@@ -7,6 +7,12 @@ export function normalizePath(p) {
   return p.replace(VERSION_PREFIX, '');
 }
 
+export function leafName(fieldPath) {
+  // code refers to the leaf: "invoices[].total.amount_cents" -> "amount_cents"
+  if (!fieldPath) return fieldPath;
+  return fieldPath.replace(/\[\]/g, '').split('.').pop();
+}
+
 export function flattenSpec(spec) {
   const out = new Map();
   const paths = spec.paths || {};
@@ -233,8 +239,9 @@ export function scanConsumer(files, changes) {
         if (c.type === 'param_renamed' || c.type === 'param_removed') {
           if (new RegExp(`['"\\s{]${c.from}['"\\s:]`).test(text)) hit = true;
         }
-        if (c.type === 'response_field_renamed' || c.type === 'response_field_removed' || c.type === 'request_field_renamed') {
-          if (new RegExp(`[.\\s{'"]${c.from}[\\s,}'":]`).test(text)) hit = true;
+        if (c.type === 'response_field_renamed' || c.type === 'response_field_removed' || c.type === 'request_field_renamed' || c.type === 'request_field_removed' || c.type === 'response_field_type_changed' || c.type === 'request_field_type_changed') {
+          const leaf = leafName(c.from || c.field);
+          if (leaf && new RegExp(`[.\\s{'"]${leaf}[\\s,}'":]`).test(text)) hit = true;
         }
         if (c.type === 'enum_value_removed') {
           if (new RegExp(`['"\`]${c.from}['"\`]`).test(text)) hit = true;
@@ -269,8 +276,9 @@ export function buildFixes(files, changes) {
             applied.push(`path ${c.from} -> ${c.to}`);
           }
         } else if ((c.type === 'param_renamed' || c.type === 'response_field_renamed' || c.type === 'request_field_renamed') && c.from && c.to) {
-          const re = new RegExp(`\\b${c.from}\\b`, 'g');
-          if (re.test(after)) { after = after.replace(re, c.to); applied.push(`rename ${c.from} -> ${c.to}`); }
+          const fromLeaf = leafName(c.from), toLeaf = leafName(c.to);
+          const re = new RegExp(`\\b${fromLeaf}\\b`, 'g');
+          if (re.test(after)) { after = after.replace(re, toLeaf); applied.push(`rename ${fromLeaf} -> ${toLeaf}`); }
         } else if (c.type === 'enum_value_removed' && c.from && c.to) {
           const re = new RegExp(`(['"\`])${c.from}\\1`, 'g');
           if (re.test(after)) { after = after.replace(re, `$1${c.to}$1`); applied.push(`enum ${c.from} -> ${c.to}`); }
