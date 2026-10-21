@@ -25,6 +25,9 @@ const normalize = (text, name) => { const d = parseSpecText(text, { sourceName: 
 
 let checked = 0, changed = 0, errors = 0;
 for (const w of watches) {
+  // Hand-seeded watches (committed to patchline-data) may omit the interval;
+  // fall back to the same 60-minute polite default the server enforces.
+  if (!Number.isFinite(w.intervalMinutes) || w.intervalMinutes <= 0) w.intervalMinutes = 60;
   if (!FORCE && w.nextCheckAt && Date.parse(w.nextCheckAt) > Date.now()) continue;
   w.lastCheckAt = new Date().toISOString();
   try {

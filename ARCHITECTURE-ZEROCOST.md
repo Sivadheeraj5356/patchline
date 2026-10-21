@@ -108,3 +108,69 @@ What remains unverified (do not present as decided):
   freshness requirements.
 - Custom domain/TLS and whether the user's profile link should point at a
   hosted demo at all (user decision, gated on product completion).
+
+## Verified component split (2026-10-22) - read viewer vs interactive product
+
+Do not read "hosted" as one thing. The pieces verify differently at $0:
+
+A. LOCAL INTERACTIVE PRODUCT - verified usable today.
+   Full server + UI + CLI: add/configure watches, run ad-hoc diff and
+   consumer scan, auth gate, all engines. 122 tests green; UI pixel-verified.
+   Cost: $0. Activation: `npm start` on any machine the owner controls.
+
+B. HOSTED WATCH (write path) - code-verified, activation owner-gated.
+   The Actions runner executes the same engines headless and commits state
+   to the patchline-data branch. Verified locally end-to-end against a live
+   fixture (baseline -> change -> 5-breaking/1-additive/1-review event,
+   2026-10-22). Runner hardened during validation: hand-seeded watches
+   without intervalMinutes no longer crash (60-min default, same as server).
+   Never run hosted: schedule commented out, no manual dispatch ever made.
+   Activation requires: owner uncomments the cron line (via GitHub web UI -
+   the deploy PAT was narrowed back to code-only and cannot push workflow
+   changes) AND accepts that runs write bot commits to patchline-data and
+   consume shared free minutes (budget hard-blocked at $0 - verified).
+
+C. HOSTED READ-ONLY VIEWER - emulation-plausible, nothing provisioned.
+   A thin host serving the UI + precomputed state JSON behind the existing
+   key gate. Local workerd emulation 2026-10-22: 60KB UI + 350KB realistic
+   state, p50 ~0ms / p95 1ms / p99 1ms / max 2ms handler time (200 requests,
+   warm; handler wall time, not billed CPU). CPU-plausible for a 10ms free
+   budget; no host account exists or was created.
+
+D. HOSTED INTERACTIVE PRODUCT - NOT viable under verified $0 constraints.
+   Ad-hoc consumer scan measured ~130ms for 400 files: 13x over the 10ms
+   free CPU budget. A hosted write path (configure watches, trigger scans
+   from the hosted UI) would additionally need a host->GitHub credential -
+   a new secret the current design deliberately avoids. So at $0, hosted =
+   scheduled watcher (B) + read-only viewer (C); interactive configuration
+   and ad-hoc analysis stay in the local product (A). This is THE material
+   narrowing of the original "hosted usable product" scope and needs the
+   owner's explicit acceptance - it is stated here, not hidden.
+
+## State transfer (for component C) - measured payload sizes
+
+Real runner output, live fixture, 2026-10-22:
+- Change event, no repo impact (6 changes incl. review flag): 2,454 B raw.
+- Change event WITH consumer impact (35-file repo scan + PR draft): 4,104 B.
+- events.json gzip: 628 B (1 event), 1,136 B (2 events incl. impact).
+- events.json is capped at 200 events by the runner: projected ceiling
+  ~0.5 MB raw / well under 150 KB gz for ordinary histories; pathological
+  ceiling if all 200 events carry a 50 KB PR body (the cap): ~10 MB raw.
+- Transfer cadence at hourly checks: 24 writes/day/watch - far under free
+  KV-style write quotas (1,000/day) IF a KV-like store is chosen.
+- Conclusion: option (b) push-model payload is small and bounded; no payload
+  obstacle. Option choice (a/b/c) still requires a real host decision first.
+
+## Exact activation decision (the whole owner-facing package)
+
+1. Accept the component split: interactive product stays local (A); hosted
+   at $0 is scheduled watch (B) + optional read-only viewer (C). If the
+   owner wants hosted interactivity, that is a paid-host conversation, not
+   a $0 configuration.
+2. To activate B: uncomment one cron line in .github/workflows/watch.yml
+   from the GitHub web UI (PAT deliberately cannot), which also authorizes
+   patchline-data bot commits and shared-minutes consumption ($0-blocked).
+3. To activate C: choose whether to create one free host account; only then
+   pick state-transfer option and domain. No account exists today.
+4. Profile addition stays gated on the user's own completion bar for both
+   products (Patchline + Shellcode) - unchanged.
