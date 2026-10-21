@@ -1,0 +1,50 @@
+# $0 hosted watch: runs the patchline engines on a schedule using GitHub
+# Actions free minutes (private repo: 2,000 min/month included; an hourly
+# ~2-minute run uses ~1,440). State lives on the patchline-data branch.
+#
+# ACTIVATION IS A DELIBERATE STEP: the schedule below is commented out so this
+# workflow is inert until the owner enables it. Manual runs work anytime via
+#   gh workflow run watch.yml   (or the Actions tab -> Run workflow)
+name: patchline-watch
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: '17 * * * *'   # hourly at :17; enable by uncommenting (owner decision)
+permissions:
+  contents: write   # push state commits to patchline-data
+concurrency:
+  group: patchline-watch
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: check out state branch (first run creates it empty)
+        run: |
+          if git ls-remote --exit-code origin patchline-data >/dev/null 2>&1; then
+            git fetch -q origin patchline-data
+            git worktree add data-checkout patchline-data
+          else
+            mkdir -p data-checkout
+            git -C data-checkout init -q -b patchline-data .
+            git -C data-checkout config user.email "patchline-actions[bot]@users.noreply.github.com"
+            git -C data-checkout config user.name "patchline-actions[bot]"
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: run watch checks
+        run: node scripts/actions-watch.mjs --data data-checkout
+      - name: commit state back to patchline-data
+        run: |
+          cd data-checkout
+          git add -A
+          if git diff --cached --quiet; then echo "no state changes"; exit 0; fi
+          git -c user.email="patchline-actions[bot]@users.noreply.github.com" -c user.name="patchline-actions[bot]" commit -q -m "watch state $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push -q "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" patchline-data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}

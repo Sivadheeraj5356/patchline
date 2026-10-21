@@ -194,6 +194,34 @@ await t('watch -> repo impact via pinned archive fetch (git-free server path)', 
   }
 });
 
+await t('shared-secret auth gate when PATCHLINE_AUTH_KEY set', async () => {
+  const child4 = spawn('node', [join(root, 'src/server.mjs')], {
+    env: { ...process.env, PORT: '18502', PATCHLINE_DATA: dataDir, PATCHLINE_MIN_INTERVAL_MIN: '1', PATCHLINE_ALLOW_PRIVATE: '1', PATCHLINE_AUTH_KEY: 'test-secret-123' },
+    stdio: 'pipe',
+  });
+  await new Promise((resolve, reject) => {
+    child4.stdout.on('data', (d) => { if (String(d).includes('patchline server on')) resolve(); });
+    setTimeout(() => reject(new Error('server4 start timeout')), 8000);
+  });
+  try {
+    const B4 = 'http://127.0.0.1:18502';
+    const health = await fetch(B4 + '/api/health');
+    ok(health.status === 200, 'health open without key');
+    const ui = await fetch(B4 + '/');
+    ok(ui.status === 200, 'UI page served without key');
+    const noKey = await fetch(B4 + '/api/watches');
+    ok(noKey.status === 401, 'watches 401 without key');
+    const wrong = await fetch(B4 + '/api/watches', { headers: { 'x-patchline-key': 'nope' } });
+    ok(wrong.status === 401, 'watches 401 with wrong key');
+    const right = await fetch(B4 + '/api/watches', { headers: { 'x-patchline-key': 'test-secret-123' } });
+    ok(right.status === 200, 'watches 200 with correct key');
+    const postNoKey = await fetch(B4 + '/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'x', url: fixtureUrl }) });
+    ok(postNoKey.status === 401, 'POST also gated');
+  } finally {
+    child4.kill();
+  }
+});
+
 child.kill();
 fixture.close();
 console.log(`${passed} passed, ${failed} failed (fixture served ${hits} requests)`);

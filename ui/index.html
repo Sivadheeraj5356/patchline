@@ -89,6 +89,33 @@
   .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 10px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
 </style>
+<script>
+// Shared-key gate client: when the server has PATCHLINE_AUTH_KEY set, every
+// /api call needs x-patchline-key. The key is prompted once and kept in
+// sessionStorage (tab-local, never written anywhere else).
+(() => {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts = {}) => {
+    if (typeof url === 'string' && url.startsWith('/api/') && url !== '/api/health') {
+      let key = sessionStorage.getItem('patchline-key');
+      if (key) {
+        opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
+      }
+      let res = await origFetch(url, opts);
+      if (res.status === 401) {
+        key = window.prompt('This Patchline server needs its access key (x-patchline-key):');
+        if (key) {
+          sessionStorage.setItem('patchline-key', key);
+          opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
+          res = await origFetch(url, opts);
+        }
+      }
+      return res;
+    }
+    return origFetch(url, opts);
+  };
+})();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -299,10 +326,40 @@ function renameCandidate(oldFields, newFields) {
   return { pairs, removedOnly: removed.filter((r) => !pairs.some(([a]) => a === r)), addedOnly: added.filter((a) => !usedAdded.has(a)) };
 }
 
+
+const leafOf = (k) => (k || '').split('.').pop();
+function collisionLeaves(...fieldSets) {
+  const s = new Set();
+  for (const fs of fieldSets) for (const k of Object.keys(fs || {})) s.add(leafOf(k));
+  return s;
+}
+// A rename pair whose "from" leaf also names a field on the other side of
+// the operation (request vs response) is ambiguous in consumer text - a read
+// looks like a write. Suppress it UNLESS the other side pairs the same leaf
+// to the same target (a consistent cross-side rename is position-safe).
+function suppressCrossSideAmbiguity(result, otherSideLeaves, otherPairMap) {
+  const keep = [], demoted = [];
+  for (const [a, b] of result.pairs) {
+    const la = leafOf(a);
+    if (otherSideLeaves.has(la) && otherPairMap.get(la) !== leafOf(b)) demoted.push([a, b]);
+    else keep.push([a, b]);
+  }
+  if (!demoted.length) return result;
+  return {
+    pairs: keep,
+    removedOnly: [...result.removedOnly, ...demoted.map(([a]) => a)],
+    addedOnly: [...result.addedOnly, ...demoted.map(([, b]) => b)],
+  };
+}
+const leafPairMap = (pairs) => new Map(pairs.map(([a, b]) => [leafOf(a), leafOf(b)]));
+
 function diffSpecs(oldSpec, newSpec) {
   const oldMap = flattenSpec(oldSpec);
   const newMap = flattenSpec(newSpec);
   const changes = [];
+  // every endpoint in either spec: lets consumer scoping recognize a file that
+  // calls a DIFFERENT known endpoint and keep it out of this diff's field hits
+  changes.allEndpoints = [...new Set([...oldMap.keys(), ...newMap.keys()].map((k) => endpointContext(k)).filter(Boolean))];
   const matched = new Set();
 
   // match endpoints across version prefixes
@@ -341,15 +398,27 @@ function diffSpecs(oldSpec, newSpec) {
     // params
     const oldP = Object.fromEntries(ep.params.map((x) => [x.name, x]));
     const newP = Object.fromEntries(nep.params.map((x) => [x.name, x]));
-    const pr = renameCandidate(
+    const prRaw = renameCandidate(
       Object.fromEntries(ep.params.map((x) => [x.name, { type: x.type }])),
       Object.fromEntries(nep.params.map((x) => [x.name, { type: x.type }]))
     );
+    const frRaw = renameCandidate(ep.responseFields, nep.responseFields);
+    const qrRaw = renameCandidate(ep.requestFields, nep.requestFields);
+    // param renames share consumer text with body fields: a param leaf that
+    // also names a request/response field is ambiguous unless a body pair
+    // maps the same leaf to the same target. Ambiguous -> manual review.
+    const bodyPairMap = new Map([...leafPairMap(frRaw.pairs), ...leafPairMap(qrRaw.pairs)]);
+    const bodyLeaves = collisionLeaves(ep.requestFields, nep.requestFields, ep.responseFields, nep.responseFields);
+    const pr = suppressCrossSideAmbiguity(prRaw, bodyLeaves, bodyPairMap);
+    const prDemotedAdded = pr.addedOnly.filter((a) => !prRaw.addedOnly.includes(a));
     for (const [a, b] of pr.pairs) {
       changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename "${a}" to "${b}" at call sites (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of pr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
+    }
+    for (const a of prDemotedAdded) {
+      changes.push({ kind: 'breaking', type: 'param_added', endpoint: key, detail: `Parameter "${a}" is new on ${newKey} and may be an ambiguous rename (its name collides with a body field) - manual review.`, migration: 'Manual review: text matching cannot distinguish this parameter from the same-named body field; confirm any rename by hand.', from: null, to: a });
     }
     // same-name params: required flip and type change
     for (const [name, op_] of Object.entries(oldP)) {
@@ -375,7 +444,7 @@ function diffSpecs(oldSpec, newSpec) {
       }
     }
     // response fields
-    const fr = renameCandidate(ep.responseFields, nep.responseFields);
+    const fr = suppressCrossSideAmbiguity(frRaw, collisionLeaves(ep.requestFields, nep.requestFields), leafPairMap(qrRaw.pairs));
     for (const [a, b] of fr.pairs) {
       changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename reads of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
@@ -393,7 +462,7 @@ function diffSpecs(oldSpec, newSpec) {
       }
     }
     // request fields
-    const qr = renameCandidate(ep.requestFields, nep.requestFields);
+    const qr = suppressCrossSideAmbiguity(qrRaw, collisionLeaves(ep.responseFields, nep.responseFields), leafPairMap(frRaw.pairs));
     for (const [a, b] of qr.pairs) {
       changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename writes of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
@@ -457,7 +526,7 @@ function scanConsumer(files, changes) {
   const usages = [];
   const seen = new Set();
   const breaking = changes.filter((c) => c.kind === 'breaking');
-  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
+  const allPaths = changes.allEndpoints || [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
     const fileEps = fileEndpointSet(f.content, allPaths);
     const lines = f.content.split('\n');
@@ -498,7 +567,7 @@ function buildFixes(files, changes, opts = {}) {
   const breaking = changes.filter((c) => c.kind === 'breaking');
   const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
   const fixes = [];
-  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
+  const allPaths = changes.allEndpoints || [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
     const fileEps = fileEndpointSet(f.content, allPaths);
     const inScope = (c) => {

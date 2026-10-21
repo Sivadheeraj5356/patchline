@@ -9,7 +9,7 @@ import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { parseSpecText, fromOpenAPI, isRealOpenAPI } from './openapi.mjs';
 import { diffSpecs, scanConsumer, buildFixes, buildPR, summarize } from './engines.mjs';
 import { fetchRepoArchive, archiveUrlFor } from './archive.mjs';
@@ -189,11 +189,24 @@ const routes = {
   },
 };
 
+// Shared-secret gate (AUTH-DESIGN.md option A): when PATCHLINE_AUTH_KEY is set,
+// every route except GET /api/health and the UI pages requires x-patchline-key.
+// When unset the server is local-mode (no auth) - never expose it to a network.
+const AUTH_KEY = process.env.PATCHLINE_AUTH_KEY || null;
+const OPEN_PATHS = new Set(['GET /api/health', 'GET /']);
+function authorized(req, key) {
+  if (!AUTH_KEY || OPEN_PATHS.has(key)) return true;
+  const got = String(req.headers['x-patchline-key'] || '');
+  const a = Buffer.from(got), b = Buffer.from(AUTH_KEY);
+  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b);
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const key = `${req.method} ${url.pathname}`;
   const handler = routes[key];
   if (!handler) { json(res, 404, { error: `no route ${key}` }); return; }
+  if (!authorized(req, key)) { json(res, 401, { error: 'missing or wrong x-patchline-key' }); return; }
   try { await handler(req, res, url); }
   catch (e) { json(res, 500, { error: e.message }); }
 });

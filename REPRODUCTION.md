@@ -58,6 +58,18 @@ Not proven / known limits:
   developer tool run on the operator's own input; the SSRF guard covers the
   server's network-exposed paths.
 
+## Auth gate
+
+Set PATCHLINE_AUTH_KEY to require x-patchline-key on every route except
+GET / and GET /api/health. Unset = local mode (never expose keyless to a
+network). The UI prompts once and keeps the key in sessionStorage.
+
+## $0 hosted watch
+
+See ARCHITECTURE-ZEROCOST.md. Headless runner: scripts/actions-watch.mjs
+(same engines as the server); workflow .github/workflows/watch.yml is
+dispatch-only until the owner uncomments the schedule.
+
 ## Running locally
 
 ```

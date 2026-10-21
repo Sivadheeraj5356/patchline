@@ -89,6 +89,33 @@
   .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 10px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
 </style>
+<script>
+// Shared-key gate client: when the server has PATCHLINE_AUTH_KEY set, every
+// /api call needs x-patchline-key. The key is prompted once and kept in
+// sessionStorage (tab-local, never written anywhere else).
+(() => {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async (url, opts = {}) => {
+    if (typeof url === 'string' && url.startsWith('/api/') && url !== '/api/health') {
+      let key = sessionStorage.getItem('patchline-key');
+      if (key) {
+        opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
+      }
+      let res = await origFetch(url, opts);
+      if (res.status === 401) {
+        key = window.prompt('This Patchline server needs its access key (x-patchline-key):');
+        if (key) {
+          sessionStorage.setItem('patchline-key', key);
+          opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
+          res = await origFetch(url, opts);
+        }
+      }
+      return res;
+    }
+    return origFetch(url, opts);
+  };
+})();
+</script>
 </head>
 <body>
 <div class="wrap">
