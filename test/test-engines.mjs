@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { flattenSpec, diffSpecs, scanConsumer, buildFixes, buildPR, summarize, normalizePath } from '../src/engines.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const fx = join(root, '..', 'fixtures');
+const fx = join(root, 'fixtures');
 const oldSpec = JSON.parse(readFileSync(join(fx, 'billing-api-v1.json'), 'utf8'));
 const newSpec = JSON.parse(readFileSync(join(fx, 'billing-api-v2.json'), 'utf8'));
 const files = readdirSync(join(fx, 'consumer')).map((n) => ({ name: n, content: readFileSync(join(fx, 'consumer', n), 'utf8') }));
