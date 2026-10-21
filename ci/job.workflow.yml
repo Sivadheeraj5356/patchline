@@ -35,6 +35,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Install dependencies (undici Agent pins SSRF-checked connections)
+        run: npm ci --omit=dev
       - name: Write job payload to file (no shell interpolation)
         env:
           JOB_PAYLOAD: ${{ inputs.payload }}
@@ -52,7 +54,7 @@ jobs:
             git rm -rf . >/dev/null 2>&1 || true
             git commit --allow-empty -m "init patchline-data"
             git push origin HEAD:patchline-data
-            git checkout -
+            git checkout "$GITHUB_SHA"  # restore main files (detached HEAD: no previous branch, so "git checkout -" fails)
           fi
       - name: Checkout job state branch
         uses: actions/checkout@v4
@@ -60,6 +62,8 @@ jobs:
           ref: patchline-data
           path: data
       - name: Run job (validated inside)
+        env:
+          GH_SCAN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/actions-job.mjs --job job.json --data data
       - name: Commit result
         working-directory: data

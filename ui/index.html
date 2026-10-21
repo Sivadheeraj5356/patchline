@@ -88,6 +88,8 @@
   footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12.5px; line-height: 1.7; }
   .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 10px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: 1; }
+  body[data-mode=worker] .urlrow { display: none; }
+  body[data-mode=worker] #addWatchRow { display: none; }
 </style>
 <script>
 // Shared-key gate client: when the server has PATCHLINE_AUTH_KEY set, every
@@ -194,6 +196,19 @@
         <button class="btn" id="runDiff">Run the diff</button>
         <button class="btn ghost" id="resetSpecs">Reset to sample</button>
         <span id="specError" style="color:var(--break);font-size:13px"></span>
+      </div>
+      <div id="hostedBox" style="display:none;margin-top:22px;border-top:1px solid var(--line);padding-top:18px">
+        <h2 style="font-size:15px;margin-bottom:6px">Hosted analysis (background job)</h2>
+        <p class="hint">Give two public spec URLs and optionally a consumer GitHub repo. Fetching and the repo scan run as a background job on this deployment's pipeline; the result renders in steps 02-04. The access key is asked once when the server needs it and stays in this tab only.</p>
+        <div class="grid2">
+          <div><label>Old spec URL</label><input type="text" id="jobOldUrl" placeholder="https://.../openapi.yaml"></div>
+          <div><label>New spec URL</label><input type="text" id="jobNewUrl" placeholder="https://.../openapi.yaml"></div>
+        </div>
+        <div style="margin-top:12px"><label>Consumer repo (optional, GitHub)</label><input type="text" id="jobRepoUrl" placeholder="https://github.com/owner/repo"></div>
+        <div class="row">
+          <button class="btn" id="runJob">Run hosted analysis</button>
+          <span id="jobStatus" style="font-size:13px;color:var(--dim)"></span>
+        </div>
       </div>
     </div>
   </section>
@@ -766,7 +781,10 @@ async function normalizeInput(text) {
     // standalone file:// mode: JSON only, no $ref resolution (hosted app handles those)
     return JSON.parse(text);
   }
+  // parse in-browser when possible - the hosted worker has no parse endpoint
+  try { return JSON.parse(text); } catch { /* not JSON: try the local server's YAML parse */ }
   const res = await fetch('/api/parse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+  if (res.status === 404 || res.status === 501) throw new Error('Pasted YAML needs the local server (npm start); this hosted deployment accepts pasted JSON, or a hosted URL analysis below.');
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || 'parse failed');
   return body.spec;
@@ -777,6 +795,7 @@ $('runDiff').addEventListener('click', async () => {
   try {
     state.oldSpec = await normalizeInput($('oldSpec').value);
     state.newSpec = await normalizeInput($('newSpec').value);
+    state.jobResult = null;
   } catch (e) { $('specError').textContent = e.message; return; }
   state.changes = diffSpecs(state.oldSpec, state.newSpec);
   renderDiff();
@@ -825,10 +844,31 @@ function renderDiff() {
 }
 
 $('toImpact').addEventListener('click', () => {
+  if (state.jobResult) { renderJobImpact(); go(3); return; }
   state.fixes = buildFixes(state.files, state.changes, { applyInferred: $('applyInferred').checked });
   renderImpact();
   go(3);
 });
+function renderJobImpact() {
+  const box = $('impactList'); box.innerHTML = '';
+  const im = state.jobResult.impact;
+  if (!im) { box.innerHTML = '<p style="color:var(--dim)">This job ran without a consumer repo - diff only. Add a consumer repo URL in step 01 for impact analysis.</p>'; return; }
+  const head = document.createElement('p');
+  head.style.cssText = 'color:var(--dim);font-size:13.5px;margin-bottom:14px';
+  head.textContent = 'Scanned ' + im.scannedFiles + ' file(s) in ' + im.repoUrl + ': ' + im.affectedLines + ' affected line(s), ' + im.proposedEdits + ' mechanical edit(s), ' + im.inferredSuggestions + ' inferred suggestion(s), ' + im.manualSpots + ' manual-review spot(s). Per-file edits are in the PR draft (step 04).';
+  box.appendChild(head);
+  if (im.usages && im.usages.length) {
+    const t = document.createElement('table');
+    t.innerHTML = '<thead><tr><th style="width:70%">File</th><th>Line</th></tr></thead>';
+    const tb = document.createElement('tbody');
+    for (const u of im.usages) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td><span class="inline-code">' + esc(u.file) + '</span></td><td>' + u.line + '</td>';
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb); box.appendChild(t);
+  }
+}
 
 $('applyInferred').addEventListener('change', () => {
   if (!state.changes) return;
@@ -875,6 +915,10 @@ function renderImpact() {
 }
 
 $('toPR').addEventListener('click', () => {
+  if (state.jobResult) {
+    $('prOut').textContent = (state.jobResult.impact && state.jobResult.impact.pr) || 'No PR draft: this job ran without a consumer repo (diff only).';
+    go(4); return;
+  }
   const pr = buildPR({
     oldVersion: state.oldSpec.info.version, newVersion: state.newSpec.info.version,
     apiTitle: state.oldSpec.info.title, changes: state.changes, fixes: state.fixes,
@@ -892,6 +936,12 @@ if (SERVER) {
   $('watchTab').style.display = '';
   if (window.__PATCHLINE_STATIC__) { const r = $('addWatchRow'); if (r) r.style.display = 'none'; }
   $('modeNote').textContent = 'Hosted mode: you can paste YAML, load specs from URLs, and set up live watches (step 05).';
+  fetch('/api/health').then((r) => r.json()).then((h) => {
+    if (!h || !h.hosted) return;
+    document.body.dataset.mode = 'worker';
+    $('hostedBox').style.display = '';
+    $('modeNote').textContent = 'Hosted mode: paste JSON specs and diff in-browser, or run a hosted URL analysis below (specs fetched and consumer repo scanned as a background job). YAML paste needs the local server.';
+  }).catch(() => {});
 } else {
   $('modeNote').textContent = 'Standalone mode: paste JSON specs. The hosted app adds YAML, URL loading and live watches.';
 }
@@ -910,7 +960,7 @@ async function refreshWatches() {
     tr.innerHTML = `<td><b>${esc(w.name)}</b></td><td><span class="inline-code">${esc(w.url)}</span></td>` +
       `<td>${w.intervalMinutes}m</td><td>${w.lastCheckAt ? new Date(w.lastCheckAt).toLocaleString() : 'never'}</td>` +
       `<td>${esc(w.lastResult || '-')}</td>` +
-      (window.__PATCHLINE_STATIC__ ? `<td><span style="color:#9da7b3">read-only snapshot</span></td>` :
+      ((window.__PATCHLINE_STATIC__ || document.body.dataset.mode === 'worker') ? `<td><span style="color:#9da7b3">read-only (no scheduler)</span></td>` :
       `<td><button class="btn ghost" data-check="${w.id}">Check now</button> <button class="btn ghost" data-del="${w.id}">Delete</button></td>`);
     tb.appendChild(tr);
   }
@@ -938,6 +988,54 @@ async function refreshWatches() {
       `<span class="counts">${ev.summary.breaking} breaking &middot; ${ev.summary.additive} additive &middot; ${ev.summary.warnings} warnings &middot; ${ev.summary.review} need review</span></div>${impactLine}`;
     el.appendChild(d);
   }
+}
+
+// ---- hosted background-job analysis (worker mode) ----
+let jobPoll = null;
+const runJobBtn = $('runJob');
+if (runJobBtn) runJobBtn.addEventListener('click', async () => {
+  const oldUrl = $('jobOldUrl').value.trim();
+  const newUrl = $('jobNewUrl').value.trim();
+  const repoUrl = $('jobRepoUrl').value.trim();
+  const st = $('jobStatus');
+  st.style.color = 'var(--dim)';
+  if (!oldUrl || !newUrl) { st.textContent = 'Both spec URLs are required.'; st.style.color = 'var(--break)'; return; }
+  st.textContent = 'Dispatching job...';
+  try {
+    const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(repoUrl ? { oldUrl, newUrl, repoUrl } : { oldUrl, newUrl }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || ('dispatch failed (' + res.status + ')'));
+    pollJob(body.job_id);
+  } catch (e) { st.textContent = e.message; st.style.color = 'var(--break)'; }
+});
+async function pollJob(id) {
+  const st = $('jobStatus');
+  clearInterval(jobPoll);
+  const started = Date.now();
+  jobPoll = setInterval(async () => {
+    if (Date.now() - started > 10 * 60 * 1000) { clearInterval(jobPoll); st.textContent = 'Timed out waiting for job ' + id.slice(0, 8) + '.'; st.style.color = 'var(--break)'; return; }
+    try {
+      const res = await fetch('/api/jobs/' + id);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || 'status check failed');
+      if (body.status === 'done') {
+        clearInterval(jobPoll);
+        st.textContent = 'Job ' + id.slice(0, 8) + ' done.';
+        state.jobResult = body.result || {};
+        state.oldSpec = null; state.newSpec = null;
+        state.changes = state.jobResult.changes || [];
+        renderDiff();
+        go(2);
+        toast('Hosted analysis complete');
+      } else if (body.status === 'error') {
+        clearInterval(jobPoll);
+        st.textContent = 'Job failed: ' + (body.error || 'unknown error');
+        st.style.color = 'var(--break)';
+      } else {
+        st.textContent = 'Job ' + id.slice(0, 8) + ' ' + (body.status || 'pending') + '... (' + Math.round((Date.now() - started) / 1000) + 's)';
+      }
+    } catch (e) { clearInterval(jobPoll); st.textContent = e.message; st.style.color = 'var(--break)'; }
+  }, 4000);
 }
 
 $('addWatch').addEventListener('click', async () => {

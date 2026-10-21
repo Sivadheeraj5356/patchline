@@ -1,0 +1,10 @@
+name = "patchline"
+main = "workers/dist/patchline-worker.mjs"
+compatibility_date = "2026-10-01"
+
+[vars]
+GITHUB_REPO = "Sivadheeraj5356/patchline"
+
+[[kv_namespaces]]
+binding = "JOBS"
+id = "9a721d58aa3b41898f434d87a22f3023"

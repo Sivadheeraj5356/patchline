@@ -317,8 +317,8 @@ export function scanConsumer(files, changes) {
           const p = (c.endpoint.split(' ')[1] || '').replace(/\{[^}]+\}/g, '');
           if (p && text.includes(p)) hit = true;
         }
-        if (c.type === 'param_renamed' || c.type === 'param_removed') {
-          if (new RegExp(`['"\\s{]${c.from}['"\\s:]`).test(text)) hit = true;
+        if (c.type === 'param_renamed' || c.type === 'param_removed' || c.type === 'param_required_changed' || c.type === 'param_type_changed') {
+          const pname = c.from || c.param; if (pname && new RegExp(`['"\\s{]${pname}['"\\s:]`).test(text)) hit = true;
         }
         if (c.type === 'response_field_renamed' || c.type === 'response_field_removed' || c.type === 'request_field_renamed' || c.type === 'request_field_removed' || c.type === 'response_field_type_changed' || c.type === 'request_field_type_changed') {
           const leaf = leafName(c.from || c.field);
