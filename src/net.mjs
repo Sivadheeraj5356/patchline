@@ -89,14 +89,14 @@ export async function fetchText(url, { metaDir = null } = {}) {
 // Binary variant of fetchText for repo archives: same per-hop SSRF guard and
 // DNS pinning, same size cap, no conditional caching (archives are immutable
 // per ref and fetched only on real spec changes).
-export async function fetchBinary(url, { maxBytes = MAX_BODY } = {}) {
+export async function fetchBinary(url, { maxBytes = MAX_BODY, headers: extraHeaders = {} } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
     let current = url;
     for (let hops = 0; hops <= MAX_REDIRECTS; hops++) {
       const { dispatcher } = await assertPublicUrl(current);
-      const res = await fetch(current, { headers: { 'user-agent': UA }, signal: ctrl.signal, redirect: 'manual', dispatcher });
+      const res = await fetch(current, { headers: { 'user-agent': UA, ...extraHeaders }, signal: ctrl.signal, redirect: 'manual', dispatcher });
       if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
         current = new URL(res.headers.get('location'), current).toString();
         continue;
