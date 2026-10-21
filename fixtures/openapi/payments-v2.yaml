@@ -1,0 +1,125 @@
+openapi: 3.0.3
+info:
+  title: Acme Payments API
+  version: 3.0.0
+security:
+  - apiKey: []
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    Money:
+      type: object
+      required: [total_cents, currency]
+      properties:
+        total_cents:
+          type: integer
+        currency:
+          type: string
+    Invoice:
+      type: object
+      required: [id, status, total]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [draft, open, paid, void, uncollectible]
+        total:
+          $ref: '#/components/schemas/Money'
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              sku:
+                type: string
+              quantity:
+                type: number
+              unit:
+                $ref: '#/components/schemas/Money'
+            required: [sku, quantity]
+    InvoiceList:
+      type: object
+      properties:
+        invoices:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invoice'
+        has_more:
+          type: boolean
+        next_cursor:
+          type: string
+      required: [invoices]
+paths:
+  /v3/invoices:
+    parameters:
+      - name: X-Request-Id
+        in: header
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listInvoices
+      deprecated: true
+      parameters:
+        - name: limit
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [draft, open, paid, void, uncollectible]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceList'
+    post:
+      operationId: createInvoice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id, idempotency_key]
+              properties:
+                customer_id:
+                  type: string
+                memo:
+                  type: string
+                idempotency_key:
+                  type: string
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+  /v3/invoices/{id}:
+    get:
+      operationId: getInvoice
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'

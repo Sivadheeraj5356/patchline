@@ -13,7 +13,8 @@ export function flattenSpec(spec) {
   for (const [p, methods] of Object.entries(paths)) {
     for (const [m, op] of Object.entries(methods)) {
       const resp = op.responses || {};
-      const first = resp['200'] || resp['201'] || Object.values(resp)[0] || {};
+      const successCodes = Object.keys(resp).filter((c) => /^2\d\d$/.test(c)).sort();
+      const first = resp['200'] || resp['201'] || (successCodes[0] && resp[successCodes[0]]) || Object.values(resp)[0] || {};
       const fields = {};
       const props = first.schema?.properties || {};
       // one level of array items / object properties is enough for the demo scope
@@ -26,6 +27,8 @@ export function flattenSpec(spec) {
           };
           if (def.type === 'array' && def.items?.properties) {
             collect(def.items.properties, prefix + name + '[].', def.items.required);
+          } else if ((def.type === 'object' || !def.type) && def.properties) {
+            collect(def.properties, prefix + name + '.', def.required);
           }
         }
       };
@@ -38,6 +41,9 @@ export function flattenSpec(spec) {
       out.set(`${m.toUpperCase()} ${p}`, {
         method: m.toUpperCase(),
         path: p,
+        deprecated: !!op.deprecated,
+        responseCodes: Object.keys(resp),
+        security: op.security !== undefined && op.security !== null ? op.security : (spec._securityDefault || []),
         normalized: normalizePath(p),
         operationId: op.operationId || null,
         params: (op.parameters || []).map((x) => ({ name: x.name, location: x.in, required: !!x.required, type: x.schema?.type || 'string', enum: x.schema?.enum || null })),
@@ -85,6 +91,19 @@ export function diffSpecs(oldSpec, newSpec) {
     }
     const [newKey, nep] = candidates[0];
     matched.add(newKey);
+    if (!ep.deprecated && nep.deprecated) {
+      changes.push({ kind: 'warning', type: 'endpoint_deprecated', endpoint: key, detail: `${newKey} is now marked deprecated in v${newSpec.info.version}.`, migration: 'Plan a move off this endpoint before its sunset; no immediate breakage.', from: key, to: null });
+    }
+    const oldCodes = (ep.responseCodes || []).filter((c) => /^2\d\d$/.test(c));
+    const newCodes = new Set((nep.responseCodes || []).filter((c) => /^2\d\d$/.test(c)));
+    for (const code of oldCodes) {
+      if (!newCodes.has(code)) {
+        changes.push({ kind: 'breaking', type: 'response_code_removed', endpoint: key, detail: `${key} no longer returns HTTP ${code}.`, migration: 'Manual review: check whether clients branch on this status code and what replaced it.', from: code, to: null });
+      }
+    }
+    if (JSON.stringify(ep.security || []) !== JSON.stringify(nep.security || [])) {
+      changes.push({ kind: 'breaking', type: 'security_changed', endpoint: key, detail: `Authentication requirements changed on ${newKey}.`, migration: 'Manual review: compare old and new security requirements and update client credentials/scopes.', from: null, to: null });
+    }
     if (ep.path !== nep.path) {
       changes.push({ kind: 'breaking', type: 'base_path_changed', endpoint: key, detail: `Base path moved ${ep.path} -> ${nep.path}.`, migration: `Replace URL prefix ${ep.path.match(VERSION_PREFIX)?.[0] || ''} with ${nep.path.match(VERSION_PREFIX)?.[0] || ''}.`, from: ep.path, to: nep.path });
     }
@@ -100,6 +119,17 @@ export function diffSpecs(oldSpec, newSpec) {
     }
     for (const r of pr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
+    }
+    // same-name params: required flip and type change
+    for (const [name, op_] of Object.entries(oldP)) {
+      const np_ = newP[name];
+      if (!np_) continue;
+      if (!op_.required && np_.required) {
+        changes.push({ kind: 'breaking', type: 'param_required_changed', endpoint: key, detail: `Parameter "${name}" on ${newKey} is now required.`, migration: `Pass "${name}" at every call site of this endpoint.`, from: name, to: null });
+      }
+      if (op_.type && np_.type && op_.type !== np_.type) {
+        changes.push({ kind: 'breaking', type: 'param_type_changed', endpoint: key, detail: `Parameter "${name}" type changed ${op_.type} -> ${np_.type} on ${newKey}.`, migration: 'Manual review: update values sent for this parameter to the new type.', from: op_.type, to: np_.type, param: name });
+      }
     }
     // enum values on params retained by name
     for (const [name, op_] of Object.entries(oldP)) {
@@ -123,10 +153,33 @@ export function diffSpecs(oldSpec, newSpec) {
     for (const a of fr.addedOnly) {
       changes.push({ kind: 'additive', type: 'response_field_added', endpoint: newKey, detail: `New response field "${a}" on ${newKey}.`, migration: 'Optional: adopt when useful.', from: null, to: a });
     }
+    // response fields retained by name: type changes
+    for (const [name, of_] of Object.entries(ep.responseFields)) {
+      const nf_ = nep.responseFields[name];
+      if (nf_ && of_.type && nf_.type && of_.type !== nf_.type) {
+        changes.push({ kind: 'breaking', type: 'response_field_type_changed', endpoint: key, detail: `Response field "${name}" type changed ${of_.type} -> ${nf_.type} on ${newKey}.`, migration: 'Manual review: update code that reads this field to handle the new type.', from: of_.type, to: nf_.type, field: name });
+      }
+    }
     // request fields
     const qr = renameCandidate(ep.requestFields, nep.requestFields);
     for (const [a, b] of qr.pairs) {
       changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename writes of "${a}" to "${b}".`, from: a, to: b });
+    }
+    for (const r of qr.removedOnly) {
+      changes.push({ kind: 'breaking', type: 'request_field_removed', endpoint: key, detail: `Request field "${r}" was removed from ${key}.`, migration: 'Manual review: stop sending this field; check whether the API now rejects or ignores it.', from: r, to: null });
+    }
+    for (const a of qr.addedOnly) {
+      const req = nep.requestFields[a]?.required;
+      changes.push(req
+        ? { kind: 'breaking', type: 'request_field_added_required', endpoint: key, detail: `New required request field "${a}" on ${newKey}.`, migration: 'Manual review: every call to this endpoint must now send a valid value for this field.', from: null, to: a }
+        : { kind: 'additive', type: 'request_field_added', endpoint: newKey, detail: `New optional request field "${a}" on ${newKey}.`, migration: 'Optional: adopt when useful.', from: null, to: a });
+    }
+    // request fields retained by name: type changes
+    for (const [name, of_] of Object.entries(ep.requestFields)) {
+      const nf_ = nep.requestFields[name];
+      if (nf_ && of_.type && nf_.type && of_.type !== nf_.type) {
+        changes.push({ kind: 'breaking', type: 'request_field_type_changed', endpoint: key, detail: `Request field "${name}" type changed ${of_.type} -> ${nf_.type} on ${newKey}.`, migration: 'Manual review: update code that writes this field to send the new type.', from: of_.type, to: nf_.type, field: name });
+      }
     }
     // response enum changes
     for (const [name, of] of Object.entries(ep.responseFields)) {
@@ -140,6 +193,14 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
   }
+  // doc-level security schemes removed
+  const oldSchemes = Object.keys(oldSpec._securitySchemes || {});
+  const newSchemes = new Set(Object.keys(newSpec._securitySchemes || {}));
+  for (const s of oldSchemes) {
+    if (!newSchemes.has(s)) {
+      changes.push({ kind: 'breaking', type: 'security_scheme_removed', endpoint: '(document)', detail: `Security scheme "${s}" was removed.`, migration: 'Manual review: clients authenticating with this scheme must move to a supported one.', from: s, to: null });
+    }
+  }
   // endpoints only in new spec
   for (const [key, ep] of newMap) {
     if (!matched.has(key)) {
@@ -149,7 +210,9 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
   }
-  return changes;
+  // judgment-required changes are flagged for review; everything else is auto-proposable
+  const REVIEW_TYPES = new Set(['endpoint_removed', 'response_code_removed', 'security_changed', 'security_scheme_removed', 'response_field_type_changed', 'request_field_type_changed', 'param_type_changed', 'request_field_removed', 'request_field_added_required']);
+  return changes.map((c) => ({ review: REVIEW_TYPES.has(c.type), ...c }));
 }
 
 // ---- consumer impact scan ----
@@ -271,5 +334,7 @@ export function buildPR({ oldVersion, newVersion, apiTitle, changes, fixes }) {
 export function summarize(changes) {
   const breaking = changes.filter((c) => c.kind === 'breaking').length;
   const additive = changes.filter((c) => c.kind === 'additive').length;
-  return { breaking, additive, total: changes.length };
+  const warnings = changes.filter((c) => c.kind === 'warning').length;
+  const review = changes.filter((c) => c.review).length;
+  return { breaking, additive, warnings, review, total: changes.length };
 }
