@@ -182,16 +182,69 @@ D. HOSTED INTERACTIVE PRODUCT - offload route RESEARCHED (2026-10-22).
      unmeasured until a real run is allowed).
    - Whether Cloudflare free signup asks for a card (pricing pages show
      $0/mo free plan; signup flow itself untested - no account created).
-   - The job workflow file itself: not written. Creating it needs the
-     Workflows permission the deploy PAT no longer has - owner commits it
-     once via the GitHub web UI, or approves a temporary scope change.
+   - No live proof of any host's billed-CPU accounting for this workload;
+     all CPU numbers are local measurements/emulation, labeled as such.
 
-   Concrete activation package IF the owner wants hosted interactivity:
-   (a) create one free Cloudflare account; (b) commit one job-workflow file
-   via the GitHub web UI (or approve temporary workflow scope); (c) create
-   one repo-scoped PAT with Actions:write + Contents:read for the worker
-   secret; (d) choose the viewer auth key. Every step reversible.
-   Until then this section is a researched route, not a built one.
+   Job path implementation status (2026-10-22): BUILT and locally
+   integration-tested, never run hosted.
+   - scripts/actions-job.mjs: one "analyze" job = spec diff + optional
+     consumer impact + PR draft (the product's steps 02-04), result to
+     <data>/jobs/<job_id>.json. 15 local integration tests cover: happy
+     path with a live fixture, traversal job_id rejected, wrong type
+     rejected, non-github repoUrl rejected, oversized URL rejected, missing
+     input rejected, dedupe replay is a no-op, SSRF layering (private
+     target without the test override lands as an error-status result, no
+     fetch), and result files contain no token material.
+   - ci/job.workflow.yml: the job workflow CONTENT, staged outside
+     .github/workflows/ so the code-only deploy PAT can carry it. It is
+     inert until the owner copies it to .github/workflows/job.yml via the
+     GitHub web UI (one paste). workflow_dispatch only; the payload is
+     never interpolated into a shell command (env-var to file, validated
+     inside the runner); concurrency group serializes branch writes;
+     push step retries with rebase; first run bootstraps patchline-data.
+   - 144 tests green overall.
+
+   Security model of the job queue (design commitments, not yet
+   attack-tested on a live deployment):
+   - Request size: dispatch payload capped at 10KB in the workflow; URLs
+     capped at 2048 chars in the runner; results capped at 200KB with a
+     truncation flag.
+   - Rate: one job per dispatch; dedupe by job_id makes replays no-ops;
+     per-caller rate limiting belongs to the hosted worker at activation
+     (e.g. N jobs/hour behind the key gate) - NOT implemented locally.
+   - Durable job IDs + authorization: job ids are random uuids; result
+     files are addressable only by uuid and served only behind the shared
+     -secret gate. An attacker without the key cannot create or read jobs;
+     an attacker WITH a leaked key can spend Actions minutes, capped by the
+     verified $0 hard-block.
+   - Snapshot exposure: the static snapshot contains watch URLs, repo URLs
+     and change details - it is as sensitive as the user's API inventory
+     and must stay behind the gate; raw spec text is never baked in.
+   - No arbitrary shell/workflow inputs: the workflow runs one fixed
+     command; the payload is data validated by the runner (enum type,
+     uuid id, https URLs, github.com-only repoUrl).
+   - Token-free artifacts: results contain only engine output; tests
+     assert no GITHUB_TOKEN/PAT-shaped strings land in result files.
+   - SSRF/archive constraints: all fetches go through the pinned-DNS
+     per-hop guard (private ranges refused); repo access is github.com
+     only through the bounded archive extractor (size/file-count/traversal
+     caps).
+   - Concurrent branch writes: workflow concurrency group + rebase-retry
+     push; worst case is a failed run after 3 retries, never a clobber.
+
+   Sources (exact URLs, fetched 2026-10-21/22):
+   - Dispatch endpoint + fine-grained PAT permission (Actions: write):
+     https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens
+     (POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches)
+   - workflow_dispatch semantics:
+     https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_dispatch
+   - Cloudflare Workers free pricing (static assets free+unlimited,
+     100k req/day, 10ms CPU):
+     https://developers.cloudflare.com/workers/platform/pricing/
+   - Cloudflare Workers limits (subrequests, KV, cron):
+     https://developers.cloudflare.com/workers/platform/limits/
+   - Account Actions budget hard-blocked at $0: live billing budgets page
+     screenshot (repo artifact evidence, 2026-10-22).
 
 ## State transfer (for component C) - measured payload sizes
 

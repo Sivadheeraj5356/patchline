@@ -1,0 +1,77 @@
+# Patchline interactive job workflow - STAGED CONTENT, NOT ACTIVE.
+# Activation: the owner copies this file to .github/workflows/job.yml via the
+# GitHub web UI (the deploy PAT deliberately lacks workflow scope). Until that
+# copy happens this file is inert documentation.
+#
+# One dispatch = one "analyze" job (spec diff + optional consumer impact).
+# Security properties:
+# - workflow_dispatch ONLY: no triggers can run this except an authenticated
+#   caller holding a token with Actions:write on this repo.
+# - The payload is never interpolated into a shell command: it travels via an
+#   environment variable into a file, and scripts/actions-job.mjs enforces the
+#   strict schema (uuid job_id, literal type, https URLs, github.com repoUrl).
+# - Concurrency group serializes branch writes; the push step retries with
+#   rebase so concurrent jobs cannot clobber each other.
+# - permissions: contents:write only. No other grants.
+name: patchline-job
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: 'Job JSON: {"job_id":"<uuid>","type":"analyze","oldUrl":"https://...","newUrl":"https://...","repoUrl":"https://github.com/owner/repo"?}'
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: patchline-jobs
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Write job payload to file (no shell interpolation)
+        env:
+          JOB_PAYLOAD: ${{ inputs.payload }}
+        run: |
+          set -euo pipefail
+          if [ "${#JOB_PAYLOAD}" -gt 10240 ]; then echo "payload too large"; exit 2; fi
+          printf '%s' "$JOB_PAYLOAD" > job.json
+      - name: Ensure patchline-data branch exists (first run only)
+        run: |
+          set -euo pipefail
+          git config user.name "patchline-bot"
+          git config user.email "patchline-bot@users.noreply.github.com"
+          if ! git ls-remote --exit-code --heads origin patchline-data >/dev/null 2>&1; then
+            git checkout --orphan patchline-data-init
+            git rm -rf . >/dev/null 2>&1 || true
+            git commit --allow-empty -m "init patchline-data"
+            git push origin HEAD:patchline-data
+            git checkout -
+          fi
+      - name: Checkout job state branch
+        uses: actions/checkout@v4
+        with:
+          ref: patchline-data
+          path: data
+      - name: Run job (validated inside)
+        run: node scripts/actions-job.mjs --job job.json --data data
+      - name: Commit result
+        working-directory: data
+        run: |
+          set -euo pipefail
+          git config user.name "patchline-bot"
+          git config user.email "patchline-bot@users.noreply.github.com"
+          git add jobs/
+          git diff --cached --quiet && exit 0
+          git commit -m "job result"
+          for i in 1 2 3; do
+            git pull --rebase origin patchline-data && git push origin patchline-data && exit 0
+            sleep 5
+          done
+          exit 1
