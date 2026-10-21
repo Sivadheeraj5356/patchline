@@ -102,10 +102,40 @@ function renameCandidate(oldFields, newFields) {
   return { pairs, removedOnly: removed.filter((r) => !pairs.some(([a]) => a === r)), addedOnly: added.filter((a) => !usedAdded.has(a)) };
 }
 
+
+const leafOf = (k) => (k || '').split('.').pop();
+function collisionLeaves(...fieldSets) {
+  const s = new Set();
+  for (const fs of fieldSets) for (const k of Object.keys(fs || {})) s.add(leafOf(k));
+  return s;
+}
+// A rename pair whose "from" leaf also names a field on the other side of
+// the operation (request vs response) is ambiguous in consumer text - a read
+// looks like a write. Suppress it UNLESS the other side pairs the same leaf
+// to the same target (a consistent cross-side rename is position-safe).
+function suppressCrossSideAmbiguity(result, otherSideLeaves, otherPairMap) {
+  const keep = [], demoted = [];
+  for (const [a, b] of result.pairs) {
+    const la = leafOf(a);
+    if (otherSideLeaves.has(la) && otherPairMap.get(la) !== leafOf(b)) demoted.push([a, b]);
+    else keep.push([a, b]);
+  }
+  if (!demoted.length) return result;
+  return {
+    pairs: keep,
+    removedOnly: [...result.removedOnly, ...demoted.map(([a]) => a)],
+    addedOnly: [...result.addedOnly, ...demoted.map(([, b]) => b)],
+  };
+}
+const leafPairMap = (pairs) => new Map(pairs.map(([a, b]) => [leafOf(a), leafOf(b)]));
+
 export function diffSpecs(oldSpec, newSpec) {
   const oldMap = flattenSpec(oldSpec);
   const newMap = flattenSpec(newSpec);
   const changes = [];
+  // every endpoint in either spec: lets consumer scoping recognize a file that
+  // calls a DIFFERENT known endpoint and keep it out of this diff's field hits
+  changes.allEndpoints = [...new Set([...oldMap.keys(), ...newMap.keys()].map((k) => endpointContext(k)).filter(Boolean))];
   const matched = new Set();
 
   // match endpoints across version prefixes
@@ -178,7 +208,9 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
     // response fields
-    const fr = renameCandidate(ep.responseFields, nep.responseFields);
+    const frRaw = renameCandidate(ep.responseFields, nep.responseFields);
+    const qrRaw = renameCandidate(ep.requestFields, nep.requestFields);
+    const fr = suppressCrossSideAmbiguity(frRaw, collisionLeaves(ep.requestFields, nep.requestFields), leafPairMap(qrRaw.pairs));
     for (const [a, b] of fr.pairs) {
       changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename reads of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
@@ -196,7 +228,7 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
     // request fields
-    const qr = renameCandidate(ep.requestFields, nep.requestFields);
+    const qr = suppressCrossSideAmbiguity(qrRaw, collisionLeaves(ep.responseFields, nep.responseFields), leafPairMap(frRaw.pairs));
     for (const [a, b] of qr.pairs) {
       changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename writes of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
@@ -260,7 +292,7 @@ export function scanConsumer(files, changes) {
   const usages = [];
   const seen = new Set();
   const breaking = changes.filter((c) => c.kind === 'breaking');
-  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
+  const allPaths = changes.allEndpoints || [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
     const fileEps = fileEndpointSet(f.content, allPaths);
     const lines = f.content.split('\n');
@@ -301,7 +333,7 @@ export function buildFixes(files, changes, opts = {}) {
   const breaking = changes.filter((c) => c.kind === 'breaking');
   const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
   const fixes = [];
-  const allPaths = [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
+  const allPaths = changes.allEndpoints || [...new Set(breaking.map((c) => endpointContext(c.endpoint)).filter(Boolean))];
   for (const f of files) {
     const fileEps = fileEndpointSet(f.content, allPaths);
     const inScope = (c) => {

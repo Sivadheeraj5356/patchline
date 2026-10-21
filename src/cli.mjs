@@ -65,7 +65,7 @@ const changes = diffSpecs(oldSpec, newSpec);
 
 let repoDir = null, cleanup = null;
 if (cli.repo && /^https?:\/\//.test(cli.repo)) {
-  repoDir = clonePublicRepo(cli.repo);
+  repoDir = await clonePublicRepo(cli.repo);
   cleanup = repoDir;
 } else if (cli.repo) {
   repoDir = cli.repo;

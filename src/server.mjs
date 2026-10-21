@@ -6,9 +6,6 @@
 // Data lives in ./data (watches, events, snapshots). No external services.
 
 import { createServer } from 'node:http';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
-import { Agent } from 'undici';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +13,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { parseSpecText, fromOpenAPI, isRealOpenAPI } from './openapi.mjs';
 import { diffSpecs, scanConsumer, buildFixes, buildPR, summarize } from './engines.mjs';
 import { walkRepo, clonePublicRepo } from './repo.mjs';
+import { assertPublicUrl, fetchText, urlHash } from './net.mjs';
 import { rmSync } from 'node:fs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,49 +22,6 @@ const PORT = Number(process.env.PORT || (process.argv.includes('--port') ? proce
 const MIN_INTERVAL_MIN = Number(process.env.PATCHLINE_MIN_INTERVAL_MIN || 60); // polite default: hourly
 const MAX_WATCHES = Number(process.env.PATCHLINE_MAX_WATCHES || 50);
 const MAX_BODY = 5 * 1024 * 1024;
-const FETCH_TIMEOUT_MS = 15000;
-const UA = 'patchline/0.2 (self-maintaining-apis; +https://github.com/patchline)';
-// SSRF guard: URL fetches (fetch-spec, analyze URLs, watches) only reach public
-// IPs. Loopback/private/link-local targets are refused unless explicitly in
-// test mode. Redirects are followed hop-by-hop with the same check.
-const ALLOW_PRIVATE = process.env.PATCHLINE_ALLOW_PRIVATE === '1';
-
-function isPrivateIP(ip) {
-  if (isIP(ip) === 6) {
-    const n = ip.toLowerCase();
-    return n === '::1' || n.startsWith('fc') || n.startsWith('fd') || n.startsWith('fe80') || n === '::' || n.startsWith('::ffff:127.') || n.startsWith('::ffff:10.') || n.startsWith('::ffff:192.168.') || n.startsWith('::ffff:169.254.') || n.startsWith('::ffff:172.');
-  }
-  const p = ip.split('.').map(Number);
-  return p[0] === 10 || p[0] === 127 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 169 && p[1] === 254) || p[0] === 0;
-}
-
-async function assertPublicUrl(rawUrl) {
-  const u = new URL(rawUrl);
-  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('only http(s) URLs are allowed');
-  if (isIP(u.hostname)) {
-    if (!ALLOW_PRIVATE && isPrivateIP(u.hostname)) throw new Error(`refusing non-public address ${u.hostname} (set PATCHLINE_ALLOW_PRIVATE=1 only for local testing)`);
-    return { url: u, dispatcher: undefined };
-  }
-  const answers = await lookup(u.hostname, { all: true });
-  if (!answers.length) throw new Error(`cannot resolve ${u.hostname}`);
-  for (const a of answers) {
-    if (!ALLOW_PRIVATE && isPrivateIP(a.address)) throw new Error(`${u.hostname} resolves to non-public address ${a.address}; refused`);
-  }
-  // pin the connection to the addresses we just validated: the fetch below
-  // must not re-resolve DNS (rebinding window between check and connect)
-  const pinned = answers.map((a) => ({ address: a.address, family: a.family }));
-  const dispatcher = new Agent({
-    connect: {
-      lookup: (hostname, opts, cb) => {
-        if (opts && opts.all) return cb(null, pinned);
-        const first = pinned[0];
-        return cb(null, first.address, first.family);
-      },
-    },
-  });
-  return { url: u, dispatcher };
-}
-
 for (const d of [DATA, join(DATA, 'snapshots')]) mkdirSync(d, { recursive: true });
 
 const loadJson = (name, fallback) => { try { return JSON.parse(readFileSync(join(DATA, name), 'utf8')); } catch { return fallback; } };
@@ -79,41 +34,11 @@ function normalizeSpecText(text, sourceName) {
   return isRealOpenAPI(doc) ? fromOpenAPI(doc) : doc;
 }
 
-async function fetchText(url) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const meta = loadJson(`snapshots/${urlHash(url)}.meta.json`, {});
-    const headers = { 'user-agent': UA, accept: 'application/json, application/yaml, text/yaml, */*' };
-    if (meta.etag) headers['if-none-match'] = meta.etag;
-    if (meta.lastModified) headers['if-modified-since'] = meta.lastModified;
-    let current = url;
-    for (let hops = 0; hops <= 3; hops++) {
-      const { dispatcher } = await assertPublicUrl(current);
-      const res = await fetch(current, { headers, signal: ctrl.signal, redirect: 'manual', dispatcher });
-      if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
-        current = new URL(res.headers.get('location'), current).toString();
-        continue;
-      }
-      if (res.status === 304) return { notModified: true };
-      if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-      const text = await res.text();
-      if (text.length > MAX_BODY) throw new Error(`spec too large (${text.length} bytes)`);
-      return { text, etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') };
-    }
-    throw new Error(`too many redirects fetching ${url}`);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-const urlHash = (url) => createHash('sha256').update(url).digest('hex').slice(0, 16);
-
 async function checkWatch(w, { force = false } = {}) {
   const now = Date.now();
   w.lastCheckAt = new Date(now).toISOString();
   try {
-    const got = await fetchText(w.url);
+    const got = await fetchText(w.url, { metaDir: join(DATA, 'snapshots') });
     if (got.notModified) { w.lastResult = 'not-modified'; return { status: 'not-modified' }; }
     const hash = createHash('sha256').update(got.text).digest('hex');
     const h = urlHash(w.url);
@@ -139,7 +64,7 @@ async function checkWatch(w, { force = false } = {}) {
       if (w.repoUrl) {
         let repoDir = null;
         try {
-          repoDir = clonePublicRepo(w.repoUrl);
+          repoDir = await clonePublicRepo(w.repoUrl);
           const files = walkRepo(repoDir).slice(0, 2000);
           const usages = scanConsumer(files, changes);
           const fixes = buildFixes(files, changes);
@@ -204,15 +129,15 @@ const routes = {
   'POST /api/fetch-spec': async (req, res) => {
     const b = await readBody(req);
     if (!/^https?:\/\//.test(b.url || '')) return json(res, 422, { error: 'url must be http(s)' });
-    try { const got = await fetchText(b.url); json(res, 200, { text: got.notModified ? null : got.text }); }
+    try { const got = await fetchText(b.url, { metaDir: join(DATA, 'snapshots') }); json(res, 200, { text: got.notModified ? null : got.text }); }
     catch (e) { json(res, 502, { error: e.message }); }
   },
 
   'POST /api/analyze': async (req, res) => {
     const b = await readBody(req);
     try {
-      const oldText = b.oldText || (b.oldUrl ? (await fetchText(b.oldUrl)).text : null);
-      const newText = b.newText || (b.newUrl ? (await fetchText(b.newUrl)).text : null);
+      const oldText = b.oldText || (b.oldUrl ? (await fetchText(b.oldUrl, { metaDir: join(DATA, 'snapshots') })).text : null);
+      const newText = b.newText || (b.newUrl ? (await fetchText(b.newUrl, { metaDir: join(DATA, 'snapshots') })).text : null);
       if (!oldText || !newText) return json(res, 422, { error: 'need oldText/oldUrl and newText/newUrl' });
       const oldSpec = normalizeSpecText(oldText, 'old');
       const newSpec = normalizeSpecText(newText, 'new');

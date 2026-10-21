@@ -7,7 +7,7 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node test/test-engines.mjs && node test/test-openapi.mjs && node test/test-server.mjs",
+    "test": "node test/test-engines.mjs && node test/test-openapi.mjs && node test/test-net.mjs && node test/test-server.mjs",
     "build:ui": "node scripts/build-ui.mjs",
     "start": "node src/server.mjs"
   },

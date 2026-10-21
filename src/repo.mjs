@@ -2,6 +2,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, extname } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { assertPublicUrl } from './net.mjs';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
@@ -22,8 +23,13 @@ export function walkRepo(dir, base = dir, out = []) {
   return out;
 }
 
-export function clonePublicRepo(url) {
+export async function clonePublicRepo(url) {
   if (!/^https?:\/\//.test(url)) throw new Error('repo URL must be http(s)');
+  // egress guard, same bar as spec fetches: refuse private/loopback targets.
+  // NOTE: git resolves DNS again during clone, so this is a bounded pre-check
+  // (short rebinding window remains); the clone flags below bound protocol
+  // escapes, redirects and credential prompts.
+  await assertPublicUrl(url);
   const dir = mkdtempSync(join(tmpdir(), 'patchline-clone-'));
   // bounded clone: https only, no credential prompts, no submodules, redirects
   // limited to the initial request (git's own redirect chain is outside our URL

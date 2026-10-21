@@ -84,5 +84,41 @@ t('PR includes verification checklist', pr.includes('Verification checklist'));
 const s = summarize(changes);
 t('summary counts add up', s.breaking + s.additive === s.total && s.breaking >= 5);
 
+
+// ---- reconciliation hardening tests (cross-side ambiguity, dedupe, endpoint scope) ----
+{
+  // response field 'status' renamed but request field 'status' retained:
+  // text matching cannot tell a read from a write -> no inferred rename
+  const mkOp = (reqProps, respProps) => ({
+    params: [], responses: { '200': { schema: { properties: respProps } } }, requestSchema: { properties: reqProps },
+  });
+  const v1 = { info: { version: '1' }, paths: { '/v1/x': { get: mkOp({ status: { type: 'string' } }, { status: { type: 'string' }, id: { type: 'string' } }) } } };
+  const v2 = { info: { version: '2' }, paths: { '/v2/x': { get: mkOp({ status: { type: 'string' } }, { state: { type: 'string' }, id: { type: 'string' } }) } } };
+  const ch = diffSpecs(v1, v2);
+  t('cross-side ambiguous rename suppressed (no response_field_renamed)', !ch.some((c) => c.type === 'response_field_renamed' && c.from === 'status'));
+  t('cross-side ambiguity falls back to removed+added', ch.some((c) => c.type === 'response_field_removed' && c.from === 'status') && ch.some((c) => c.type === 'response_field_added' && c.to === 'state'));
+
+  // consistent cross-side rename (both sides amount_cents->total_cents) stays inferred
+  const w1 = { info: { version: '1' }, paths: { '/v1/y': { post: mkOp({ amount_cents: { type: 'integer' } }, { amount_cents: { type: 'integer' } }) } } };
+  const w2 = { info: { version: '2' }, paths: { '/v2/y': { post: mkOp({ total_cents: { type: 'integer' } }, { total_cents: { type: 'integer' } }) } } };
+  const ch2 = diffSpecs(w1, w2);
+  t('consistent cross-side rename kept on response side', ch2.some((c) => c.type === 'response_field_renamed' && c.from === 'amount_cents' && c.to === 'total_cents'));
+  t('consistent cross-side rename kept on request side', ch2.some((c) => c.type === 'request_field_renamed' && c.from === 'amount_cents' && c.to === 'total_cents'));
+}
+{
+  // duplicate suggestions: same file/line/replacement from two changes (GET+POST schema) collapses to one
+  const files2 = [{ name: 'a.js', content: "const r = await api.get('/v1/invoices', { limit: 20 });\n" }];
+  const mkChange = (endpoint) => ({ kind: 'breaking', type: 'param_renamed', endpoint, from: 'limit', to: 'page_size', inferred: true, migration: 'm' });
+  const fxd = buildFixes(files2, [mkChange('GET /v1/invoices'), mkChange('POST /v1/invoices')]);
+  t('identical suggestion from two changes deduped to one', fxd[0].suggested.length === 1);
+
+  // cross-endpoint scope: a file that only calls /v1/other is not flagged for /v1/invoices changes
+  const files3 = [{ name: 'b.js', content: "await api.get('/v1/other', { limit: 5 });\n" }];
+  const ch3 = [mkChange('GET /v1/invoices')]; ch3.allEndpoints = ['/invoices/', '/other'];
+  const usages3 = scanConsumer(files3, ch3);
+  t('no usage flagged in file calling a different endpoint', usages3.length === 0);
+  const fxd3 = buildFixes(files3, ch3);
+  t('no suggestion or edit in file calling a different endpoint', fxd3.length === 0 || (fxd3[0].suggested.length === 0 && fxd3[0].edits.length === 0));
+}
 console.log(`${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('FAILURES:'); failures.forEach((f) => console.log(' - ' + f)); process.exit(1); }
