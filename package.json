@@ -7,9 +7,10 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node test/test-engines.mjs && node test/test-openapi.mjs && node test/test-net.mjs && node test/test-archive.mjs && node test/test-server.mjs && node test/test-export.mjs && node test/test-job.mjs",
+    "test": "node test/test-engines.mjs && node test/test-openapi.mjs && node test/test-net.mjs && node test/test-archive.mjs && node test/test-server.mjs && node test/test-export.mjs && node test/test-job.mjs && node test/test-worker.mjs",
     "build:ui": "node scripts/build-ui.mjs",
-    "start": "node src/server.mjs"
+    "start": "node src/server.mjs",
+    "build:worker": "node scripts/build-worker.mjs"
   },
   "keywords": [],
   "author": "",
@@ -19,5 +20,8 @@
     "undici": "^6.29.1",
     "yaml": "^2.9.1"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "miniflare": "^4.20260730.0"
+  }
 }

@@ -195,6 +195,17 @@ D. HOSTED INTERACTIVE PRODUCT - offload route RESEARCHED (2026-10-22).
      input rejected, dedupe replay is a no-op, SSRF layering (private
      target without the test override lands as an error-status result, no
      fetch), and result files contain no token material.
+   - workers/patchline-worker.mjs (+ scripts/build-worker.mjs bundling the
+     real UI): the proxy host itself. 22 miniflare integration tests against
+     a mock GitHub API cover the binding the route depends on: gate 401s
+     (missing/wrong key), UI served openly, branch read-back for watches/
+     events/results, job validation (https-only URLs, github.com-only
+     repoUrl, size caps), dispatch shape (exact endpoint, ref main, PAT in
+     the upstream authorization header only, validated inner payload), KV
+     dedupe (identical payload -> same job id, no second dispatch), hourly
+     rate limit (429 past the cap), unknown job id -> 404, and secret
+     hygiene (neither the PAT nor the gate key appears in any response
+     body). Mock-based: proves the proxy logic, not the live GitHub path.
    - ci/job.workflow.yml: the job workflow CONTENT, staged outside
      .github/workflows/ so the code-only deploy PAT can carry it. It is
      inert until the owner copies it to .github/workflows/job.yml via the
