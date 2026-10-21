@@ -137,15 +137,18 @@ C. HOSTED READ-ONLY VIEWER - emulation-plausible, nothing provisioned.
    warm; handler wall time, not billed CPU). CPU-plausible for a 10ms free
    budget; no host account exists or was created.
 
-D. HOSTED INTERACTIVE PRODUCT - NOT viable under verified $0 constraints.
-   Ad-hoc consumer scan measured ~130ms for 400 files: 13x over the 10ms
-   free CPU budget. A hosted write path (configure watches, trigger scans
-   from the hosted UI) would additionally need a host->GitHub credential -
-   a new secret the current design deliberately avoids. So at $0, hosted =
-   scheduled watcher (B) + read-only viewer (C); interactive configuration
-   and ad-hoc analysis stay in the local product (A). This is THE material
-   narrowing of the original "hosted usable product" scope and needs the
-   owner's explicit acceptance - it is stated here, not hidden.
+D. HOSTED INTERACTIVE PRODUCT - no verified zero-cost route today.
+   What measurement actually rules out is narrower: running the consumer
+   scan in-request on ONE runtime (a 10ms-CPU free worker; 400-file scan
+   measured ~130ms). It does NOT rule out hosted interactivity in general:
+   an architecture that offloads scans/diffs to bounded background jobs
+   (e.g. the Actions runner, dispatched on demand, results read back by the
+   viewer) could stay at zero cost without any paid host. That architecture
+   is unresearched, not promised: job dispatch latency, dispatch auth from
+   the host, and result hand-off are open questions. Honest current state:
+   no verified full-free hosted-interactive route exists as of 2026-10-22;
+   that is a gap in verification, not a proof of impossibility, and not a
+   "pay or give up" binary for the owner.
 
 ## State transfer (for component C) - measured payload sizes
 
@@ -161,16 +164,46 @@ Real runner output, live fixture, 2026-10-22:
 - Conclusion: option (b) push-model payload is small and bounded; no payload
   obstacle. Option choice (a/b/c) still requires a real host decision first.
 
+## The one candidate architecture (no variant shopping)
+
+Candidate: "scheduled watch + static snapshot viewer" - BUILT and preview-
+verified locally (2026-10-22), nothing hosted.
+- scripts/export-static.mjs bakes watches/events into one self-contained
+  index.html running the real UI in read-only static mode (static-mode shim:
+  GET /api/watches + /api/events resolve from the baked snapshot; all other
+  /api calls refuse with a clear 501 message; add-watch form hidden; watch
+  rows marked read-only; baked payload escapes </script> - test-covered).
+- The Actions runner renders the snapshot at the end of every run into
+  <data>/dist (best-effort, never fails the watch) - so the workflow commits
+  state + viewer artifact together when (and only when) the owner activates.
+- Verified end-to-end locally: live fixture -> baseline -> spec change ->
+  event -> export, all in one runner pass, 0 errors. Viewer pixels verified
+  (banner, baked watch row + events, no action buttons, no auth overlay).
+  129 tests green (7 export tests incl. the XSS escape guard).
+- The viewer host (C) would serve exactly this static output behind the
+  existing key gate. Delivery to a host is a deploy-step question answered
+  at activation time with the owner's chosen host (scoped deploy credential
+  the owner creates then). No account exists; none was created.
+- Local preview of the exact viewer experience needs no account:
+  `node scripts/export-static.mjs --data <data> --out dist` + any static
+  file server.
+
+Remaining unknowns (not decided, not hidden):
+- Which free host, if any, the owner wants an account on (owner decision;
+  none created).
+- Hosted interactivity via job offload (section D) - unresearched.
+- Custom domain/TLS; whether a hosted demo belongs in the profile at all.
+
 ## Exact activation decision (the whole owner-facing package)
 
-1. Accept the component split: interactive product stays local (A); hosted
-   at $0 is scheduled watch (B) + optional read-only viewer (C). If the
-   owner wants hosted interactivity, that is a paid-host conversation, not
-   a $0 configuration.
-2. To activate B: uncomment one cron line in .github/workflows/watch.yml
-   from the GitHub web UI (PAT deliberately cannot), which also authorizes
-   patchline-data bot commits and shared-minutes consumption ($0-blocked).
-3. To activate C: choose whether to create one free host account; only then
-   pick state-transfer option and domain. No account exists today.
+1. To activate B (hosted watch): uncomment one cron line in
+   .github/workflows/watch.yml from the GitHub web UI (the deploy PAT
+   deliberately cannot), which also authorizes patchline-data bot commits
+   and shared-minutes consumption (budget hard-blocked at zero, verified).
+2. To activate C (hosted viewer): choose whether to create one free host
+   account for the static snapshot; the deploy credential and host choice
+   are made then. No account exists today.
+3. If hosted interactivity is wanted: say so, and the job-offload research
+   (D) gets done before anything is built - it is not ruled in or out.
 4. Profile addition stays gated on the user's own completion bar for both
    products (Patchline + Shellcode) - unchanged.

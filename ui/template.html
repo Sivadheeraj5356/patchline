@@ -117,6 +117,18 @@
   };
   window.__origFetch = window.fetch.bind(window);
   window.fetch = (url, opts = {}) => {
+    // Static export mode: baked snapshot data, read-only. GET /api/watches and
+    // /api/events resolve from window.__PATCHLINE_STATIC__; everything else is
+    // refused with a clear message instead of silently failing.
+    if (window.__PATCHLINE_STATIC__ && typeof url === 'string' && url.startsWith('/api/')) {
+      const snap = window.__PATCHLINE_STATIC__;
+      const jsonRes = (code, body) => Promise.resolve(new Response(JSON.stringify(body), { status: code, headers: { 'content-type': 'application/json' } }));
+      if (url === '/api/health') return jsonRes(200, { ok: true, static: true, exportedAt: snap.exportedAt, watches: snap.watches.length, events: snap.events.length });
+      const m = (opts.method || 'GET').toUpperCase();
+      if (m === 'GET' && url === '/api/watches') return jsonRes(200, { watches: snap.watches, minIntervalMinutes: snap.minIntervalMinutes || 60 });
+      if (m === 'GET' && url === '/api/events') return jsonRes(200, { events: snap.events });
+      return jsonRes(501, { error: 'Static snapshot (read-only). Interactive features - adding watches, running checks, ad-hoc analysis - need the local server: npm start.' });
+    }
     if (!(typeof url === 'string' && url.startsWith('/api/') && url !== '/api/health')) {
       return window.__origFetch(url, opts);
     }
@@ -225,7 +237,7 @@
     <div class="card">
       <h2>Watch a live API spec</h2>
       <p class="hint">Patchline polls the spec URL on the interval you set (minimum <span id="minInt">60</span> minutes, with conditional requests so unchanged specs cost one cheap 304), saves a baseline, and records a diff event whenever the served spec actually changes.</p>
-      <div class="row" style="margin-top:0;margin-bottom:14px">
+      <div class="row" id="addWatchRow" style="margin-top:0;margin-bottom:14px">
         <input type="text" id="wName" placeholder="Name (e.g. Acme Payments)" style="max-width:240px">
         <input type="text" id="wUrl" placeholder="https://.../openapi.yaml" style="max-width:340px">
         <input type="text" id="wInt" placeholder="Minutes" style="max-width:100px">
@@ -411,6 +423,7 @@ $('copyPR').addEventListener('click', async () => {
 // ---- watch tab (hosted mode only) ----
 if (SERVER) {
   $('watchTab').style.display = '';
+  if (window.__PATCHLINE_STATIC__) { const r = $('addWatchRow'); if (r) r.style.display = 'none'; }
   $('modeNote').textContent = 'Hosted mode: you can paste YAML, load specs from URLs, and set up live watches (step 05).';
 } else {
   $('modeNote').textContent = 'Standalone mode: paste JSON specs. The hosted app adds YAML, URL loading and live watches.';
@@ -430,7 +443,8 @@ async function refreshWatches() {
     tr.innerHTML = `<td><b>${esc(w.name)}</b></td><td><span class="inline-code">${esc(w.url)}</span></td>` +
       `<td>${w.intervalMinutes}m</td><td>${w.lastCheckAt ? new Date(w.lastCheckAt).toLocaleString() : 'never'}</td>` +
       `<td>${esc(w.lastResult || '-')}</td>` +
-      `<td><button class="btn ghost" data-check="${w.id}">Check now</button> <button class="btn ghost" data-del="${w.id}">Delete</button></td>`;
+      (window.__PATCHLINE_STATIC__ ? `<td><span style="color:#9da7b3">read-only snapshot</span></td>` :
+      `<td><button class="btn ghost" data-check="${w.id}">Check now</button> <button class="btn ghost" data-del="${w.id}">Delete</button></td>`);
     tb.appendChild(tr);
   }
   tb.querySelectorAll('[data-check]').forEach((b) => b.addEventListener('click', async () => {

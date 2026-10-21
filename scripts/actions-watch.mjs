@@ -78,4 +78,14 @@ for (const w of watches) {
 }
 saveJson('watches.json', watches);
 saveJson('events.json', events.slice(0, 200));
+
+// Render the static snapshot (candidate viewer artifact) into <data>/dist so
+// the workflow commits it alongside the state. Best-effort: a broken export
+// must never fail the watch itself.
+try {
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(process.execPath, [new URL('./export-static.mjs', import.meta.url).pathname, '--data', DATA, '--out', join(DATA, 'dist')], { encoding: 'utf8' });
+  process.stdout.write(out);
+} catch (e) { console.log('static export skipped: ' + e.message); }
+
 console.log(`patchline watch run: ${checked} checked, ${changed} changed, ${errors} errors (${watches.length} watches)`);

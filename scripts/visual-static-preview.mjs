@@ -1,0 +1,16 @@
+import puppeteer from 'puppeteer-core';
+const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1280, height: 900 });
+const errors = [];
+page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+await page.goto('http://127.0.0.1:8472/', { waitUntil: 'networkidle0' });
+await page.click('#watchTab');
+await new Promise((r) => setTimeout(r, 900));
+await page.screenshot({ path: '/tmp/static-1-watch.png', fullPage: true });
+const watchText = await page.$eval('#watchList', (el) => el.textContent).catch(() => '');
+const health = await page.evaluate(() => fetch('/api/health').then((r) => r.json()));
+const mutation = await page.evaluate(() => fetch('/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).then((r) => r.status));
+const overlayShown = await page.$eval('#unlockOverlay', (el) => getComputedStyle(el).display !== 'none');
+console.log(JSON.stringify({ watchText: watchText.slice(0, 160), health, mutationStatus: mutation, overlayShown, errors }, null, 1));
+await browser.close();
