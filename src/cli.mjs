@@ -68,6 +68,8 @@ function applyFixes(files, fixes) {
   return written;
 }
 
+function gitIn(dir, ...a) { return execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' }).trim(); }
+
 const cli = args();
 if (cli._[0] !== 'analyze' || !cli.old || !cli.new) {
   console.error('usage: node src/cli.mjs analyze --old <file|url> --new <file|url> [--repo <dir|git-url>] [--json out] [--md out] [--write]');
@@ -108,6 +110,19 @@ if (cli.md) writeFileSync(cli.md, pr);
 if (cli.write && files.length) {
   const n = applyFixes(files, fixes);
   console.error(`applied ${n} edit(s) in place`);
+  // Optional: prepare a reviewable branch in the repo (local only - never pushed here).
+  if (cli.branch && repoDir) {
+    const branch = String(cli.branch);
+    gitIn(repoDir, 'checkout', '-b', branch);
+    writeFileSync(join(repoDir, 'PATCHLINE_MIGRATION.md'), pr);
+    gitIn(repoDir, 'add', '-A');
+    gitIn(repoDir, '-c', 'user.email=patchline@local', '-c', 'user.name=Patchline', 'commit', '-m', `patchline: migrate to ${newSpec.info?.title || 'API'} ${newSpec.info?.version || 'new version'}
+
+${pr.split('\n')[0]}
+
+See PATCHLINE_MIGRATION.md for the full analysis.`);
+    console.error(`branch "${branch}" ready in ${repoDir} with the fixes + PATCHLINE_MIGRATION.md (NOT pushed - review and push manually)`);
+  }
 }
 
 function dirname2(p) { return p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '.'; }
