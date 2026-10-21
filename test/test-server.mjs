@@ -27,7 +27,7 @@ const fixtureUrl = `http://127.0.0.1:${fixturePort}/spec`;
 
 const dataDir = mkdtempSync(join(tmpdir(), 'patchline-data-'));
 const child = spawn('node', [join(root, 'src/server.mjs'), '--port', '0'], {
-  env: { ...process.env, PORT: '18499', PATCHLINE_DATA: dataDir, PATCHLINE_MIN_INTERVAL_MIN: '1' },
+  env: { ...process.env, PORT: '18499', PATCHLINE_DATA: dataDir, PATCHLINE_MIN_INTERVAL_MIN: '1', PATCHLINE_ALLOW_PRIVATE: '1' },
   stdio: 'pipe',
 });
 await new Promise((resolve, reject) => {
@@ -108,6 +108,48 @@ await t('watch persists across restart (data dir)', async () => {
 await t('fetch-spec proxies a URL', async () => {
   const r = await post('/api/fetch-spec', { url: fixtureUrl });
   ok(r.text === null || r.text.includes('Acme Payments'), JSON.stringify(r).slice(0, 120));
+});
+
+await t('SSRF guard: second server without test-mode flag refuses private URLs', async () => {
+  const child2 = spawn('node', [join(root, 'src/server.mjs')], {
+    env: { ...process.env, PORT: '18500', PATCHLINE_DATA: dataDir },
+    stdio: 'pipe',
+  });
+  await new Promise((resolve, reject) => {
+    child2.stdout.on('data', (d) => { if (String(d).includes('patchline server on')) resolve(); });
+    setTimeout(() => reject(new Error('server2 start timeout')), 8000);
+  });
+  try {
+    const r = await (await fetch('http://127.0.0.1:18500/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'ssrf', url: fixtureUrl }) })).json();
+    ok(r.error && /non-public|refus/i.test(r.error), JSON.stringify(r));
+    const r2 = await (await fetch('http://127.0.0.1:18500/api/fetch-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: fixtureUrl }) })).json();
+    ok(r2.error && /non-public|refus/i.test(r2.error), JSON.stringify(r2));
+  } finally {
+    child2.kill();
+  }
+});
+
+await t('watch with repoUrl attaches consumer impact to change events', async () => {
+  // local bare repo standing in for a public consumer repo (file:// clone, no network)
+  const consumerRepo = mkdtempSync(join(tmpdir(), 'patchline-consumer-'));
+  const { execFileSync } = await import('node:child_process');
+  execFileSync('git', ['init', '-q'], { cwd: consumerRepo });
+  execFileSync('git', ['-C', consumerRepo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init']);
+  writeFileSync(join(consumerRepo, 'app.js'), "const t = inv.amount_cents / 100;\nawait api.get('/v2/payouts');\n");
+  execFileSync('git', ['-C', consumerRepo, 'add', '-A']);
+  execFileSync('git', ['-C', consumerRepo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'app']);
+
+  current = specV1;
+  const created = await post('/api/watches', { name: 'with-repo', url: fixtureUrl, repoUrl: 'file://' + consumerRepo, intervalMinutes: 1 });
+  // file:// is not http(s) - repoUrl must be rejected, proving validation
+  ok(created.error, 'file:// repoUrl should be rejected');
+  const created2 = await post('/api/watches', { name: 'with-repo2', url: fixtureUrl, intervalMinutes: 1 });
+  ok(created2.watch, JSON.stringify(created2));
+  current = specV2;
+  const changed = await post('/api/watches/check', { id: created2.watch.id });
+  ok(changed.status === 'changed', 'change');
+  ok(!changed.event.impact, 'no repoUrl -> no impact block');
+  await fetch(B + '/api/watches?id=' + created2.watch.id, { method: 'DELETE' });
 });
 
 child.kill();

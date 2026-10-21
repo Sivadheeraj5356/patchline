@@ -46,6 +46,21 @@ node src/cli.mjs analyze --old old.yaml --new https://api.example/openapi.json \
 
 `--repo` also accepts a public git URL (shallow-cloned for the scan).
 
+### Safety model
+
+- **Inferred changes are never auto-applied.** Rename and enum-replacement detection
+  is heuristic: pairs are only guessed when the match is unambiguous (same parent
+  object, single type-compatible partner both directions), and even then they are
+  shown as suggestions requiring confirmation. `--apply-inferred` / the UI checkbox
+  applies them only on explicit request. Ambiguous cases are reported as separate
+  removed/added entries, never paired.
+- **SSRF guard**: every server-side URL fetch (spec URLs, watches) resolves DNS and
+  refuses non-public IPs, follows redirects hop-by-hop with the same check, caps
+  size at 5MB and time at 15s. Private/loopback targets need `PATCHLINE_ALLOW_PRIVATE=1`
+  (local testing only). Watch cadence floor is 60 minutes with conditional GETs.
+- **No repo code execution**: consumer repos are only read (scan) or shallow-cloned;
+  Patchline never runs a repo's commands, hooks, or tests itself.
+
 ## Boundaries (by design)
 
 - Removed endpoints are never auto-rewritten; they are flagged for manual review.

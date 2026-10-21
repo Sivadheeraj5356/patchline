@@ -62,14 +62,25 @@ export function flattenSpec(spec) {
 }
 
 function renameCandidate(oldFields, newFields) {
-  // a field present in old but absent in new, where a new field of same type appeared -> rename guess
+  // A rename is an INFERENCE, not a fact: pair a removed field with an added
+  // field only when the match is unambiguous both directions (exactly one
+  // type-compatible partner on each side). Ambiguous cases stay separate
+  // removed/added entries - a wrong rename guess silently corrupts data.
   const removed = Object.keys(oldFields).filter((k) => !(k in newFields));
   const added = Object.keys(newFields).filter((k) => !(k in oldFields));
   const pairs = [];
   const usedAdded = new Set();
+  const parentOf = (k) => k.includes('.') ? k.slice(0, k.lastIndexOf('.') + 1) : '';
   for (const r of removed) {
-    const match = added.find((a) => !usedAdded.has(a) && newFields[a].type === oldFields[r].type);
-    if (match) { pairs.push([r, match]); usedAdded.add(match); }
+    let cands = added.filter((a) => !usedAdded.has(a) && newFields[a].type === oldFields[r].type);
+    // a renamed field normally stays in the same object - same-parent matches win
+    const sameParent = cands.filter((a) => parentOf(a) === parentOf(r));
+    if (sameParent.length) cands = sameParent;
+    if (cands.length !== 1) continue;
+    const reverse = removed.filter((x) => x !== r && !pairs.some(([pr]) => pr === x) && oldFields[x].type === newFields[cands[0]].type && parentOf(x) === parentOf(cands[0]));
+    if (reverse.length > 0) continue;
+    pairs.push([r, cands[0]]);
+    usedAdded.add(cands[0]);
   }
   return { pairs, removedOnly: removed.filter((r) => !pairs.some(([a]) => a === r)), addedOnly: added.filter((a) => !usedAdded.has(a)) };
 }
@@ -121,7 +132,7 @@ export function diffSpecs(oldSpec, newSpec) {
       Object.fromEntries(nep.params.map((x) => [x.name, { type: x.type }]))
     );
     for (const [a, b] of pr.pairs) {
-      changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" is now "${b}" on ${newKey}.`, migration: `Rename "${a}" to "${b}" at call sites.`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename "${a}" to "${b}" at call sites (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of pr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
@@ -144,14 +155,15 @@ export function diffSpecs(oldSpec, newSpec) {
         const lost = op_.enum.filter((v) => !np_.enum.includes(v));
         const gained = np_.enum.filter((v) => !op_.enum.includes(v));
         for (const v of lost) {
-          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `"${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Replace "${v}" with "${gained[0]}".` : 'Choose a supported value manually.', from: v, to: gained[0] || null, param: name });
+          const guess = gained.length === 1 ? gained[0] : null;
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `"${name}" value "${v}" was removed${guess ? ` (new value "${guess}" may replace it - inferred, verify)` : ''}.`, migration: guess ? `Suggested: replace "${v}" with "${guess}" (inferred - confirm before applying).` : 'Choose a supported value manually.', from: v, to: guess, param: name, inferred: !!guess });
         }
       }
     }
     // response fields
     const fr = renameCandidate(ep.responseFields, nep.responseFields);
     for (const [a, b] of fr.pairs) {
-      changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename reads of "${a}" to "${b}".`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename reads of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of fr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'response_field_removed', endpoint: key, detail: `Response field "${r}" was removed from ${key}.`, migration: 'Stop reading this field or source it elsewhere.', from: r, to: null });
@@ -169,7 +181,7 @@ export function diffSpecs(oldSpec, newSpec) {
     // request fields
     const qr = renameCandidate(ep.requestFields, nep.requestFields);
     for (const [a, b] of qr.pairs) {
-      changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename writes of "${a}" to "${b}".`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename writes of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of qr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'request_field_removed', endpoint: key, detail: `Request field "${r}" was removed from ${key}.`, migration: 'Manual review: stop sending this field; check whether the API now rejects or ignores it.', from: r, to: null });
@@ -194,7 +206,8 @@ export function diffSpecs(oldSpec, newSpec) {
         const lost = of.enum.filter((v) => !nf.enum.includes(v));
         const gained = nf.enum.filter((v) => !of.enum.includes(v));
         for (const v of lost) {
-          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `Response field "${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Map "${v}" to "${gained[0]}".` : 'Map manually to a supported value.', from: v, to: gained[0] || null, field: name });
+          const guess = gained.length === 1 ? gained[0] : null;
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `Response field "${name}" value "${v}" was removed${guess ? ` (new value "${guess}" may replace it - inferred, verify)` : ''}.`, migration: guess ? `Suggested: map "${v}" to "${guess}" (inferred - confirm before applying).` : 'Map manually to a supported value.', from: v, to: guess, field: name, inferred: !!guess });
         }
       }
     }
@@ -216,9 +229,11 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
   }
-  // judgment-required changes are flagged for review; everything else is auto-proposable
+  // judgment-required changes are flagged for review. Anything inferred
+  // (rename guesses, enum replacements) needs human confirmation too - only
+  // spec-explicit changes are auto-proposable.
   const REVIEW_TYPES = new Set(['endpoint_removed', 'response_code_removed', 'security_changed', 'security_scheme_removed', 'response_field_type_changed', 'request_field_type_changed', 'param_type_changed', 'request_field_removed', 'request_field_added_required']);
-  return changes.map((c) => ({ review: REVIEW_TYPES.has(c.type), ...c }));
+  return changes.map((c) => ({ review: REVIEW_TYPES.has(c.type) || !!c.inferred, ...c }));
 }
 
 // ---- consumer impact scan ----
@@ -255,13 +270,14 @@ export function scanConsumer(files, changes) {
 
 // ---- fix generation ----
 
-export function buildFixes(files, changes) {
+export function buildFixes(files, changes, opts = {}) {
   const breaking = changes.filter((c) => c.kind === 'breaking');
   const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
   const fixes = [];
   for (const f of files) {
     const lines = f.content.split('\n');
     const edits = [];
+    const suggested = [];
     lines.forEach((text, i) => {
       // Never auto-edit a line that calls a removed endpoint; manual review owns it.
       if (removedPaths.some((p) => p && text.includes(p))) return;
@@ -278,10 +294,26 @@ export function buildFixes(files, changes) {
         } else if ((c.type === 'param_renamed' || c.type === 'response_field_renamed' || c.type === 'request_field_renamed') && c.from && c.to) {
           const fromLeaf = leafName(c.from), toLeaf = leafName(c.to);
           const re = new RegExp(`\\b${fromLeaf}\\b`, 'g');
-          if (re.test(after)) { after = after.replace(re, toLeaf); applied.push(`rename ${fromLeaf} -> ${toLeaf}`); }
+          if (re.test(after)) {
+            const replaced = after.replace(re, toLeaf);
+            if (c.inferred && !opts.applyInferred) {
+              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred rename ${fromLeaf} -> ${toLeaf}`], reason: c.migration });
+            } else {
+              after = replaced;
+              applied.push(`rename ${fromLeaf} -> ${toLeaf}${c.inferred ? ' (inferred)' : ''}`);
+            }
+          }
         } else if (c.type === 'enum_value_removed' && c.from && c.to) {
           const re = new RegExp(`(['"\`])${c.from}\\1`, 'g');
-          if (re.test(after)) { after = after.replace(re, `$1${c.to}$1`); applied.push(`enum ${c.from} -> ${c.to}`); }
+          if (re.test(after)) {
+            const replaced = after.replace(re, `$1${c.to}$1`);
+            if (c.inferred && !opts.applyInferred) {
+              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred enum ${c.from} -> ${c.to}`], reason: c.migration });
+            } else {
+              after = replaced;
+              applied.push(`enum ${c.from} -> ${c.to}${c.inferred ? ' (inferred)' : ''}`);
+            }
+          }
         }
       }
       if (applied.length) edits.push({ line: i + 1, before: text, after, applied });
@@ -296,7 +328,7 @@ export function buildFixes(files, changes) {
         }
       }
     });
-    if (edits.length || manual.length) fixes.push({ file: f.name, edits, manual });
+    if (edits.length || manual.length || suggested.length) fixes.push({ file: f.name, edits, manual, suggested });
   }
   return fixes;
 }
@@ -330,6 +362,13 @@ export function buildPR({ oldVersion, newVersion, apiTitle, changes, fixes }) {
       L.push(`+ ${e.after.trim()}`);
     }
     L.push('```');
+    for (const sg of f.suggested || []) {
+      L.push('```diff');
+      L.push(`@@ line ${sg.line} INFERRED - verify before applying (${sg.applied.join('; ')})`);
+      L.push(`- ${sg.before.trim()}`);
+      L.push(`+ ${sg.after.trim()}`);
+      L.push('```');
+    }
     for (const mn of f.manual) L.push(`- :warning: Manual review at line ${mn.line}: \`${mn.text}\` - ${mn.reason}`);
   }
   L.push('');

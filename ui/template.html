@@ -96,7 +96,7 @@
     <div class="logo">Patch<span>line</span></div>
     <div class="tag">Self-maintaining API clients</div>
   </header>
-  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase, and drafts the migration pull request - <b>deterministically, no AI inference</b>. It reads real OpenAPI 3.x documents (YAML or JSON, $refs resolved) and can watch a live spec URL for changes. The sample below is a fictional billing API.</p>
+  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase, and drafts the migration pull request - <b>deterministically, no AI inference</b>. It reads real OpenAPI 3.x documents (YAML or JSON, local $refs resolved) and can watch a live spec URL for changes. The sample below is a fictional billing API.</p>
 
   <nav class="steps">
     <button data-step="1" class="on"><span class="n">01</span>Specs</button>
@@ -109,7 +109,7 @@
   <section id="s1" class="on">
     <div class="card">
       <h2>Choose the spec pair</h2>
-      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. Paste any <b>OpenAPI 3.x spec (YAML or JSON)</b> - <code>$ref</code>s, request bodies and content-wrapped schemas are resolved. <span id="modeNote"></span></p>
+      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. Paste any <b>OpenAPI 3.x spec (YAML or JSON)</b> - Local <code>$ref</code>s, request bodies and content-wrapped schemas are resolved. <span id="modeNote"></span></p>
       <div class="grid2">
         <div>
           <label>Old spec - <span id="oldVerLabel"></span></label>
@@ -146,13 +146,16 @@
       <p class="hint">The sample consumer is a 4-file JS app calling the old API. Patchline flags lines matching the detected breaking-change patterns and proposes safe mechanical edits. Removed endpoints are never auto-rewritten - they are flagged for manual review.</p>
       <div id="impactList"></div>
     </div>
-    <div class="row"><button class="btn" id="toPR">Generate the migration PR</button></div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--dim)"><input type="checkbox" id="applyInferred" style="width:auto"> Apply inferred rename/enum suggestions (guesses - verify first)</label>
+      <button class="btn" id="toPR">Prepare the migration PR draft</button>
+    </div>
   </section>
 
   <section id="s4">
     <div class="card">
       <h2>Draft pull request</h2>
-      <p class="hint">This is the artifact a provider's update agent would open against the customer repo - or what a neutral "Dependabot for APIs" service would file.</p>
+      <p class="hint">A prepared draft only - Patchline never opens or sends PRs. A human reviews this markdown, applies the branch, and files the PR.</p>
       <pre class="pr" id="prOut"></pre>
       <div class="row">
         <button class="btn" id="copyPR">Copy PR markdown</button>
@@ -287,9 +290,15 @@ function renderDiff() {
 }
 
 $('toImpact').addEventListener('click', () => {
-  state.fixes = buildFixes(state.files, state.changes);
+  state.fixes = buildFixes(state.files, state.changes, { applyInferred: $('applyInferred').checked });
   renderImpact();
   go(3);
+});
+
+$('applyInferred').addEventListener('change', () => {
+  if (!state.changes) return;
+  state.fixes = buildFixes(state.files, state.changes, { applyInferred: $('applyInferred').checked });
+  renderImpact();
 });
 
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
@@ -302,7 +311,7 @@ function renderImpact() {
   for (const f of state.fixes) {
     const div = document.createElement('div');
     div.className = 'file-block';
-    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${f.manual.length} manual</span></div>`;
+    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${(f.suggested || []).length} inferred &middot; ${f.manual.length} manual</span></div>`;
     if (f.edits.length) {
       inner += '<pre class="diff">';
       for (const e of f.edits) {
@@ -311,6 +320,9 @@ function renderImpact() {
         inner += `<span class="addline">+ ${esc(e.after.trim())}</span>`;
       }
       inner += '</pre>';
+    }
+    for (const sg of (f.suggested || [])) {
+      inner += `<div class="manual-item">&#9888; Inferred suggestion (verify before applying), line ${sg.line}:<br><code>- ${esc(sg.before.trim())}</code><br><code>+ ${esc(sg.after.trim())}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(sg.reason)}</span></div>`;
     }
     for (const mn of f.manual) {
       inner += `<div class="manual-item">&#9888; Manual review, line ${mn.line}: <code>${esc(mn.text)}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(mn.reason)}</span></div>`;

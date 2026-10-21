@@ -6,12 +6,16 @@
 // Data lives in ./data (watches, events, snapshots). No external services.
 
 import { createServer } from 'node:http';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { parseSpecText, fromOpenAPI, isRealOpenAPI } from './openapi.mjs';
 import { diffSpecs, scanConsumer, buildFixes, buildPR, summarize } from './engines.mjs';
+import { walkRepo, clonePublicRepo } from './repo.mjs';
+import { rmSync } from 'node:fs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.PATCHLINE_DATA || join(root, 'data');
@@ -21,6 +25,34 @@ const MAX_WATCHES = Number(process.env.PATCHLINE_MAX_WATCHES || 50);
 const MAX_BODY = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15000;
 const UA = 'patchline/0.2 (self-maintaining-apis; +https://github.com/patchline)';
+// SSRF guard: URL fetches (fetch-spec, analyze URLs, watches) only reach public
+// IPs. Loopback/private/link-local targets are refused unless explicitly in
+// test mode. Redirects are followed hop-by-hop with the same check.
+const ALLOW_PRIVATE = process.env.PATCHLINE_ALLOW_PRIVATE === '1';
+
+function isPrivateIP(ip) {
+  if (isIP(ip) === 6) {
+    const n = ip.toLowerCase();
+    return n === '::1' || n.startsWith('fc') || n.startsWith('fd') || n.startsWith('fe80') || n === '::' || n.startsWith('::ffff:127.') || n.startsWith('::ffff:10.') || n.startsWith('::ffff:192.168.') || n.startsWith('::ffff:169.254.') || n.startsWith('::ffff:172.');
+  }
+  const p = ip.split('.').map(Number);
+  return p[0] === 10 || p[0] === 127 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 169 && p[1] === 254) || p[0] === 0;
+}
+
+async function assertPublicUrl(rawUrl) {
+  const u = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(u.protocol)) throw new Error('only http(s) URLs are allowed');
+  if (isIP(u.hostname)) {
+    if (!ALLOW_PRIVATE && isPrivateIP(u.hostname)) throw new Error(`refusing non-public address ${u.hostname} (set PATCHLINE_ALLOW_PRIVATE=1 only for local testing)`);
+    return u;
+  }
+  const answers = await lookup(u.hostname, { all: true });
+  if (!answers.length) throw new Error(`cannot resolve ${u.hostname}`);
+  for (const a of answers) {
+    if (!ALLOW_PRIVATE && isPrivateIP(a.address)) throw new Error(`${u.hostname} resolves to non-public address ${a.address}; refused`);
+  }
+  return u;
+}
 
 for (const d of [DATA, join(DATA, 'snapshots')]) mkdirSync(d, { recursive: true });
 
@@ -42,12 +74,21 @@ async function fetchText(url) {
     const headers = { 'user-agent': UA, accept: 'application/json, application/yaml, text/yaml, */*' };
     if (meta.etag) headers['if-none-match'] = meta.etag;
     if (meta.lastModified) headers['if-modified-since'] = meta.lastModified;
-    const res = await fetch(url, { headers, signal: ctrl.signal, redirect: 'follow' });
-    if (res.status === 304) return { notModified: true };
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
-    const text = await res.text();
-    if (text.length > MAX_BODY) throw new Error(`spec too large (${text.length} bytes)`);
-    return { text, etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') };
+    let current = url;
+    for (let hops = 0; hops <= 3; hops++) {
+      await assertPublicUrl(current);
+      const res = await fetch(current, { headers, signal: ctrl.signal, redirect: 'manual' });
+      if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
+        current = new URL(res.headers.get('location'), current).toString();
+        continue;
+      }
+      if (res.status === 304) return { notModified: true };
+      if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+      const text = await res.text();
+      if (text.length > MAX_BODY) throw new Error(`spec too large (${text.length} bytes)`);
+      return { text, etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') };
+    }
+    throw new Error(`too many redirects fetching ${url}`);
   } finally {
     clearTimeout(timer);
   }
@@ -82,6 +123,29 @@ async function checkWatch(w, { force = false } = {}) {
         oldVersion: oldSpec.info?.version || null, newVersion: newSpec.info?.version || null,
         summary: summarize(changes), changes,
       };
+      if (w.repoUrl) {
+        let repoDir = null;
+        try {
+          repoDir = clonePublicRepo(w.repoUrl);
+          const files = walkRepo(repoDir).slice(0, 2000);
+          const usages = scanConsumer(files, changes);
+          const fixes = buildFixes(files, changes);
+          event.impact = {
+            repoUrl: w.repoUrl, scannedFiles: files.length,
+            affectedLines: usages.length,
+            proposedEdits: fixes.reduce((n, f) => n + f.edits.length, 0),
+            inferredSuggestions: fixes.reduce((n, f) => n + (f.suggested || []).length, 0),
+            manualSpots: fixes.reduce((n, f) => n + f.manual.length, 0),
+            usages: usages.slice(0, 100).map((u) => ({ file: u.file, line: u.line, change: u.change.type })),
+            pr: buildPR({ oldVersion: event.oldVersion, newVersion: event.newVersion, apiTitle: oldSpec.info?.title || w.name, changes, fixes }).slice(0, 50000),
+          };
+          w.lastResult += `; impact: ${usages.length} affected line(s)`;
+        } catch (e) {
+          event.impact = { repoUrl: w.repoUrl, error: e.message };
+        } finally {
+          if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+        }
+      }
       events.unshift(event);
       events = events.slice(0, 200);
       saveJson('events.json', events);
@@ -151,10 +215,12 @@ const routes = {
   'POST /api/watches': async (req, res) => {
     const b = await readBody(req);
     if (!b.name || !/^https?:\/\//.test(b.url || '')) return json(res, 422, { error: 'need name and http(s) url' });
+    try { await assertPublicUrl(b.url); } catch (e) { return json(res, 422, { error: e.message }); }
     const interval = Math.max(MIN_INTERVAL_MIN, Number(b.intervalMinutes) || MIN_INTERVAL_MIN);
     if (watches.length >= MAX_WATCHES) return json(res, 429, { error: `watch limit ${MAX_WATCHES} reached` });
     if (watches.some((w) => w.url === b.url)) return json(res, 409, { error: 'url already watched' });
-    const w = { id: randomUUID(), name: String(b.name).slice(0, 120), url: b.url, intervalMinutes: interval, createdAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + interval * 60000).toISOString(), lastCheckAt: null, lastResult: null };
+    if (b.repoUrl) { try { await assertPublicUrl(b.repoUrl); } catch (e) { return json(res, 422, { error: `repoUrl: ${e.message}` }); } }
+    const w = { id: randomUUID(), name: String(b.name).slice(0, 120), url: b.url, repoUrl: b.repoUrl ? String(b.repoUrl) : null, intervalMinutes: interval, createdAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + interval * 60000).toISOString(), lastCheckAt: null, lastResult: null };
     watches.push(w);
     saveJson('watches.json', watches);
     // baseline fetch immediately so the first change is detectable

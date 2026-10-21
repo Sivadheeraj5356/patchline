@@ -42,13 +42,31 @@ t('scan flags amount_cents usage', usages.some((u) => u.file === 'invoices.js' &
 t('scan flags removed /v1/charges', usages.some((u) => u.file === 'charges.js' && u.text.includes('/v1/charges')));
 t('scan does not flag clean client.js headers', !usages.some((u) => u.file === 'client.js' && u.text.includes('Content-Type')));
 
-// buildFixes
+// buildFixes - default: inferred renames/enum guesses are SUGGESTED, not applied
 const fixes = buildFixes(files, changes);
 const inv = fixes.find((f) => f.file === 'invoices.js');
 t('fix renames path prefix in invoices.js', inv.edits.some((e) => e.after.includes("'/v2/invoices'")));
-t('fix renames limit->page_size', inv.edits.some((e) => e.after.includes('page_size: 20')));
-t('fix maps pending->open', inv.edits.some((e) => e.after.includes("'open'")));
-t('fix renames amount_cents->total_cents', inv.edits.some((e) => e.after.includes('total_cents / 100')));
+t('inferred rename limit->page_size suggested not applied', !inv.edits.some((e) => e.after.includes('page_size: 20')) && inv.suggested.some((s) => s.after.includes('page_size: 20')));
+t('inferred enum pending->open suggested not applied', !inv.edits.some((e) => e.after.includes("'open'")) && inv.suggested.some((s) => s.after.includes("'open'")));
+t('inferred rename amount_cents->total_cents suggested not applied', !inv.edits.some((e) => e.after.includes('total_cents / 100')) && inv.suggested.some((s) => s.after.includes('total_cents / 100')));
+
+// buildFixes with applyInferred: the apply mechanism itself still works when a human opts in
+const fixesAI = buildFixes(files, changes, { applyInferred: true });
+const invAI = fixesAI.find((f) => f.file === 'invoices.js');
+t('applyInferred applies limit->page_size', invAI.edits.some((e) => e.after.includes('page_size: 20')));
+t('applyInferred maps pending->open', invAI.edits.some((e) => e.after.includes("'open'")));
+t('applyInferred renames amount_cents->total_cents', invAI.edits.some((e) => e.after.includes('total_cents / 100')));
+
+// ambiguous renames must NOT pair (false-positive guard)
+const amb1 = { paths: { '/v1/x': { get: { responses: { '200': { schema: { type: 'object', properties: { a: { type: 'integer' }, b: { type: 'integer' } } } } } } } } };
+const amb2 = { paths: { '/v1/x': { get: { responses: { '200': { schema: { type: 'object', properties: { c: { type: 'integer' }, d: { type: 'integer' } } } } } } } } };
+const ambChanges = diffSpecs(amb1, amb2);
+t('ambiguous rename produces no rename guess', !ambChanges.some((c) => c.type === 'response_field_renamed'));
+t('ambiguous fields reported as removed+added separately', ambChanges.filter((c) => c.type === 'response_field_removed').length === 2 && ambChanges.filter((c) => c.type === 'response_field_added').length === 2);
+const ambEnum1 = { paths: { '/v1/y': { get: { parameters: [{ name: 's', in: 'query', schema: { type: 'string', enum: ['x'] } }], responses: {} } } } };
+const ambEnum2 = { paths: { '/v1/y': { get: { parameters: [{ name: 's', in: 'query', schema: { type: 'string', enum: ['p', 'q'] } }], responses: {} } } } };
+const ambEnum = diffSpecs(ambEnum1, ambEnum2);
+t('enum with multiple candidates gets no inferred replacement', ambEnum.some((c) => c.type === 'enum_value_removed' && c.from === 'x' && !c.to && !c.inferred));
 const chg = fixes.find((f) => f.file === 'charges.js');
 t('charges.js flagged manual review (endpoint removed)', chg && chg.manual.length >= 1);
 t('no auto-edit claimed for removed endpoint', !chg.edits.some((e) => e.after.includes('/v2/charges')));

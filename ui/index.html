@@ -96,7 +96,7 @@
     <div class="logo">Patch<span>line</span></div>
     <div class="tag">Self-maintaining API clients</div>
   </header>
-  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase, and drafts the migration pull request - <b>deterministically, no AI inference</b>. It reads real OpenAPI 3.x documents (YAML or JSON, $refs resolved) and can watch a live spec URL for changes. The sample below is a fictional billing API.</p>
+  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase, and drafts the migration pull request - <b>deterministically, no AI inference</b>. It reads real OpenAPI 3.x documents (YAML or JSON, local $refs resolved) and can watch a live spec URL for changes. The sample below is a fictional billing API.</p>
 
   <nav class="steps">
     <button data-step="1" class="on"><span class="n">01</span>Specs</button>
@@ -109,7 +109,7 @@
   <section id="s1" class="on">
     <div class="card">
       <h2>Choose the spec pair</h2>
-      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. Paste any <b>OpenAPI 3.x spec (YAML or JSON)</b> - <code>$ref</code>s, request bodies and content-wrapped schemas are resolved. <span id="modeNote"></span></p>
+      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. Paste any <b>OpenAPI 3.x spec (YAML or JSON)</b> - Local <code>$ref</code>s, request bodies and content-wrapped schemas are resolved. <span id="modeNote"></span></p>
       <div class="grid2">
         <div>
           <label>Old spec - <span id="oldVerLabel"></span></label>
@@ -146,13 +146,16 @@
       <p class="hint">The sample consumer is a 4-file JS app calling the old API. Patchline flags lines matching the detected breaking-change patterns and proposes safe mechanical edits. Removed endpoints are never auto-rewritten - they are flagged for manual review.</p>
       <div id="impactList"></div>
     </div>
-    <div class="row"><button class="btn" id="toPR">Generate the migration PR</button></div>
+    <div class="row">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--dim)"><input type="checkbox" id="applyInferred" style="width:auto"> Apply inferred rename/enum suggestions (guesses - verify first)</label>
+      <button class="btn" id="toPR">Prepare the migration PR draft</button>
+    </div>
   </section>
 
   <section id="s4">
     <div class="card">
       <h2>Draft pull request</h2>
-      <p class="hint">This is the artifact a provider's update agent would open against the customer repo - or what a neutral "Dependabot for APIs" service would file.</p>
+      <p class="hint">A prepared draft only - Patchline never opens or sends PRs. A human reviews this markdown, applies the branch, and files the PR.</p>
       <pre class="pr" id="prOut"></pre>
       <div class="row">
         <button class="btn" id="copyPR">Copy PR markdown</button>
@@ -256,14 +259,25 @@ function flattenSpec(spec) {
 }
 
 function renameCandidate(oldFields, newFields) {
-  // a field present in old but absent in new, where a new field of same type appeared -> rename guess
+  // A rename is an INFERENCE, not a fact: pair a removed field with an added
+  // field only when the match is unambiguous both directions (exactly one
+  // type-compatible partner on each side). Ambiguous cases stay separate
+  // removed/added entries - a wrong rename guess silently corrupts data.
   const removed = Object.keys(oldFields).filter((k) => !(k in newFields));
   const added = Object.keys(newFields).filter((k) => !(k in oldFields));
   const pairs = [];
   const usedAdded = new Set();
+  const parentOf = (k) => k.includes('.') ? k.slice(0, k.lastIndexOf('.') + 1) : '';
   for (const r of removed) {
-    const match = added.find((a) => !usedAdded.has(a) && newFields[a].type === oldFields[r].type);
-    if (match) { pairs.push([r, match]); usedAdded.add(match); }
+    let cands = added.filter((a) => !usedAdded.has(a) && newFields[a].type === oldFields[r].type);
+    // a renamed field normally stays in the same object - same-parent matches win
+    const sameParent = cands.filter((a) => parentOf(a) === parentOf(r));
+    if (sameParent.length) cands = sameParent;
+    if (cands.length !== 1) continue;
+    const reverse = removed.filter((x) => x !== r && !pairs.some(([pr]) => pr === x) && oldFields[x].type === newFields[cands[0]].type && parentOf(x) === parentOf(cands[0]));
+    if (reverse.length > 0) continue;
+    pairs.push([r, cands[0]]);
+    usedAdded.add(cands[0]);
   }
   return { pairs, removedOnly: removed.filter((r) => !pairs.some(([a]) => a === r)), addedOnly: added.filter((a) => !usedAdded.has(a)) };
 }
@@ -315,7 +329,7 @@ function diffSpecs(oldSpec, newSpec) {
       Object.fromEntries(nep.params.map((x) => [x.name, { type: x.type }]))
     );
     for (const [a, b] of pr.pairs) {
-      changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" is now "${b}" on ${newKey}.`, migration: `Rename "${a}" to "${b}" at call sites.`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename "${a}" to "${b}" at call sites (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of pr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
@@ -338,14 +352,15 @@ function diffSpecs(oldSpec, newSpec) {
         const lost = op_.enum.filter((v) => !np_.enum.includes(v));
         const gained = np_.enum.filter((v) => !op_.enum.includes(v));
         for (const v of lost) {
-          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `"${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Replace "${v}" with "${gained[0]}".` : 'Choose a supported value manually.', from: v, to: gained[0] || null, param: name });
+          const guess = gained.length === 1 ? gained[0] : null;
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `"${name}" value "${v}" was removed${guess ? ` (new value "${guess}" may replace it - inferred, verify)` : ''}.`, migration: guess ? `Suggested: replace "${v}" with "${guess}" (inferred - confirm before applying).` : 'Choose a supported value manually.', from: v, to: guess, param: name, inferred: !!guess });
         }
       }
     }
     // response fields
     const fr = renameCandidate(ep.responseFields, nep.responseFields);
     for (const [a, b] of fr.pairs) {
-      changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename reads of "${a}" to "${b}".`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename reads of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of fr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'response_field_removed', endpoint: key, detail: `Response field "${r}" was removed from ${key}.`, migration: 'Stop reading this field or source it elsewhere.', from: r, to: null });
@@ -363,7 +378,7 @@ function diffSpecs(oldSpec, newSpec) {
     // request fields
     const qr = renameCandidate(ep.requestFields, nep.requestFields);
     for (const [a, b] of qr.pairs) {
-      changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename writes of "${a}" to "${b}".`, from: a, to: b });
+      changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename writes of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of qr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'request_field_removed', endpoint: key, detail: `Request field "${r}" was removed from ${key}.`, migration: 'Manual review: stop sending this field; check whether the API now rejects or ignores it.', from: r, to: null });
@@ -388,7 +403,8 @@ function diffSpecs(oldSpec, newSpec) {
         const lost = of.enum.filter((v) => !nf.enum.includes(v));
         const gained = nf.enum.filter((v) => !of.enum.includes(v));
         for (const v of lost) {
-          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `Response field "${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Map "${v}" to "${gained[0]}".` : 'Map manually to a supported value.', from: v, to: gained[0] || null, field: name });
+          const guess = gained.length === 1 ? gained[0] : null;
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `Response field "${name}" value "${v}" was removed${guess ? ` (new value "${guess}" may replace it - inferred, verify)` : ''}.`, migration: guess ? `Suggested: map "${v}" to "${guess}" (inferred - confirm before applying).` : 'Map manually to a supported value.', from: v, to: guess, field: name, inferred: !!guess });
         }
       }
     }
@@ -410,9 +426,11 @@ function diffSpecs(oldSpec, newSpec) {
       }
     }
   }
-  // judgment-required changes are flagged for review; everything else is auto-proposable
+  // judgment-required changes are flagged for review. Anything inferred
+  // (rename guesses, enum replacements) needs human confirmation too - only
+  // spec-explicit changes are auto-proposable.
   const REVIEW_TYPES = new Set(['endpoint_removed', 'response_code_removed', 'security_changed', 'security_scheme_removed', 'response_field_type_changed', 'request_field_type_changed', 'param_type_changed', 'request_field_removed', 'request_field_added_required']);
-  return changes.map((c) => ({ review: REVIEW_TYPES.has(c.type), ...c }));
+  return changes.map((c) => ({ review: REVIEW_TYPES.has(c.type) || !!c.inferred, ...c }));
 }
 
 // ---- consumer impact scan ----
@@ -449,13 +467,14 @@ function scanConsumer(files, changes) {
 
 // ---- fix generation ----
 
-function buildFixes(files, changes) {
+function buildFixes(files, changes, opts = {}) {
   const breaking = changes.filter((c) => c.kind === 'breaking');
   const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
   const fixes = [];
   for (const f of files) {
     const lines = f.content.split('\n');
     const edits = [];
+    const suggested = [];
     lines.forEach((text, i) => {
       // Never auto-edit a line that calls a removed endpoint; manual review owns it.
       if (removedPaths.some((p) => p && text.includes(p))) return;
@@ -472,10 +491,26 @@ function buildFixes(files, changes) {
         } else if ((c.type === 'param_renamed' || c.type === 'response_field_renamed' || c.type === 'request_field_renamed') && c.from && c.to) {
           const fromLeaf = leafName(c.from), toLeaf = leafName(c.to);
           const re = new RegExp(`\\b${fromLeaf}\\b`, 'g');
-          if (re.test(after)) { after = after.replace(re, toLeaf); applied.push(`rename ${fromLeaf} -> ${toLeaf}`); }
+          if (re.test(after)) {
+            const replaced = after.replace(re, toLeaf);
+            if (c.inferred && !opts.applyInferred) {
+              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred rename ${fromLeaf} -> ${toLeaf}`], reason: c.migration });
+            } else {
+              after = replaced;
+              applied.push(`rename ${fromLeaf} -> ${toLeaf}${c.inferred ? ' (inferred)' : ''}`);
+            }
+          }
         } else if (c.type === 'enum_value_removed' && c.from && c.to) {
           const re = new RegExp(`(['"\`])${c.from}\\1`, 'g');
-          if (re.test(after)) { after = after.replace(re, `$1${c.to}$1`); applied.push(`enum ${c.from} -> ${c.to}`); }
+          if (re.test(after)) {
+            const replaced = after.replace(re, `$1${c.to}$1`);
+            if (c.inferred && !opts.applyInferred) {
+              suggested.push({ line: i + 1, before: text, after: replaced, applied: [`inferred enum ${c.from} -> ${c.to}`], reason: c.migration });
+            } else {
+              after = replaced;
+              applied.push(`enum ${c.from} -> ${c.to}${c.inferred ? ' (inferred)' : ''}`);
+            }
+          }
         }
       }
       if (applied.length) edits.push({ line: i + 1, before: text, after, applied });
@@ -490,7 +525,7 @@ function buildFixes(files, changes) {
         }
       }
     });
-    if (edits.length || manual.length) fixes.push({ file: f.name, edits, manual });
+    if (edits.length || manual.length || suggested.length) fixes.push({ file: f.name, edits, manual, suggested });
   }
   return fixes;
 }
@@ -524,6 +559,13 @@ function buildPR({ oldVersion, newVersion, apiTitle, changes, fixes }) {
       L.push(`+ ${e.after.trim()}`);
     }
     L.push('```');
+    for (const sg of f.suggested || []) {
+      L.push('```diff');
+      L.push(`@@ line ${sg.line} INFERRED - verify before applying (${sg.applied.join('; ')})`);
+      L.push(`- ${sg.before.trim()}`);
+      L.push(`+ ${sg.after.trim()}`);
+      L.push('```');
+    }
     for (const mn of f.manual) L.push(`- :warning: Manual review at line ${mn.line}: \`${mn.text}\` - ${mn.reason}`);
   }
   L.push('');
@@ -635,9 +677,15 @@ function renderDiff() {
 }
 
 $('toImpact').addEventListener('click', () => {
-  state.fixes = buildFixes(state.files, state.changes);
+  state.fixes = buildFixes(state.files, state.changes, { applyInferred: $('applyInferred').checked });
   renderImpact();
   go(3);
+});
+
+$('applyInferred').addEventListener('change', () => {
+  if (!state.changes) return;
+  state.fixes = buildFixes(state.files, state.changes, { applyInferred: $('applyInferred').checked });
+  renderImpact();
 });
 
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
@@ -650,7 +698,7 @@ function renderImpact() {
   for (const f of state.fixes) {
     const div = document.createElement('div');
     div.className = 'file-block';
-    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${f.manual.length} manual</span></div>`;
+    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${(f.suggested || []).length} inferred &middot; ${f.manual.length} manual</span></div>`;
     if (f.edits.length) {
       inner += '<pre class="diff">';
       for (const e of f.edits) {
@@ -659,6 +707,9 @@ function renderImpact() {
         inner += `<span class="addline">+ ${esc(e.after.trim())}</span>`;
       }
       inner += '</pre>';
+    }
+    for (const sg of (f.suggested || [])) {
+      inner += `<div class="manual-item">&#9888; Inferred suggestion (verify before applying), line ${sg.line}:<br><code>- ${esc(sg.before.trim())}</code><br><code>+ ${esc(sg.after.trim())}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(sg.reason)}</span></div>`;
     }
     for (const mn of f.manual) {
       inner += `<div class="manual-item">&#9888; Manual review, line ${mn.line}: <code>${esc(mn.text)}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(mn.reason)}</span></div>`;

@@ -7,16 +7,12 @@
 // Defaults to a dry run: report only, no files modified. --write applies the
 // auto-proposable edits in place (review-flagged spots are never auto-edited).
 
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { parseSpecText, fromOpenAPI, isRealOpenAPI } from './openapi.mjs';
 import { diffSpecs, scanConsumer, buildFixes, buildPR, summarize } from './engines.mjs';
-
-const CODE_EXTS = new Set(['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.rb', '.go', '.java', '.php', '.kt', '.cs']);
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', 'target', 'vendor', '__pycache__', '.venv', 'venv', 'coverage']);
+import { walkRepo, clonePublicRepo } from './repo.mjs';
 
 function args() {
   const a = process.argv.slice(2);
@@ -41,19 +37,6 @@ async function loadSpec(ref) {
   return isRealOpenAPI(doc) ? fromOpenAPI(doc) : doc;
 }
 
-function walkRepo(dir, base = dir, out = []) {
-  for (const name of readdirSync(dir)) {
-    if (SKIP_DIRS.has(name)) continue;
-    const p = join(dir, name);
-    const st = statSync(p);
-    if (st.isDirectory()) walkRepo(p, base, out);
-    else if (CODE_EXTS.has(extname(name)) && st.size < 512 * 1024) {
-      out.push({ name: relative(base, p), path: p, content: readFileSync(p, 'utf8') });
-    }
-  }
-  return out;
-}
-
 function applyFixes(files, fixes) {
   const byName = new Map(fixes.map((f) => [f.file, f]));
   let written = 0;
@@ -72,7 +55,7 @@ function gitIn(dir, ...a) { return execFileSync('git', ['-C', dir, ...a], { enco
 
 const cli = args();
 if (cli._[0] !== 'analyze' || !cli.old || !cli.new) {
-  console.error('usage: node src/cli.mjs analyze --old <file|url> --new <file|url> [--repo <dir|git-url>] [--json out] [--md out] [--write]');
+  console.error('usage: node src/cli.mjs analyze --old <file|url> --new <file|url> [--repo <dir|git-url>] [--json out] [--md out] [--write] [--branch name] [--apply-inferred]');
   process.exit(2);
 }
 
@@ -82,8 +65,7 @@ const changes = diffSpecs(oldSpec, newSpec);
 
 let repoDir = null, cleanup = null;
 if (cli.repo && /^https?:\/\//.test(cli.repo)) {
-  repoDir = mkdtempSync(join(tmpdir(), 'patchline-clone-'));
-  execFileSync('git', ['clone', '--depth', '1', cli.repo, repoDir], { stdio: 'pipe' });
+  repoDir = clonePublicRepo(cli.repo);
   cleanup = repoDir;
 } else if (cli.repo) {
   repoDir = cli.repo;
@@ -96,7 +78,7 @@ if (cli.files) {
 }
 
 const usages = files.length ? scanConsumer(files, changes) : [];
-const fixes = files.length ? buildFixes(files, changes) : [];
+const fixes = files.length ? buildFixes(files, changes, { applyInferred: !!cli['apply-inferred'] }) : [];
 const pr = buildPR({
   oldVersion: oldSpec.info?.version || 'old',
   newVersion: newSpec.info?.version || 'new',
