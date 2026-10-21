@@ -20,6 +20,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.PATCHLINE_DATA || join(root, 'data');
 const PORT = Number(process.env.PORT || (process.argv.includes('--port') ? process.argv[process.argv.indexOf('--port') + 1] : 8484));
 const MIN_INTERVAL_MIN = Number(process.env.PATCHLINE_MIN_INTERVAL_MIN || 60); // polite default: hourly
+// Remote repo cloning is DISABLED by default: git resolves DNS itself, so the
+// clone-time pre-check leaves a short rebinding window a hostile repoUrl could
+// exploit. Enable only for local/operator-run deployments until a pinned
+// archive-fetch + bounded extractor replaces git clone on server paths.
+const allowRemoteClone = () => process.env.PATCHLINE_ALLOW_REMOTE_CLONE === '1';
+const REMOTE_CLONE_DISABLED = 'remote repo cloning is disabled (git clone is not SSRF-pinned); set PATCHLINE_ALLOW_REMOTE_CLONE=1 only on a local/operator deployment';
 const MAX_WATCHES = Number(process.env.PATCHLINE_MAX_WATCHES || 50);
 const MAX_BODY = 5 * 1024 * 1024;
 for (const d of [DATA, join(DATA, 'snapshots')]) mkdirSync(d, { recursive: true });
@@ -64,6 +70,7 @@ async function checkWatch(w, { force = false } = {}) {
       if (w.repoUrl) {
         let repoDir = null;
         try {
+          if (!allowRemoteClone()) throw new Error(REMOTE_CLONE_DISABLED);
           repoDir = await clonePublicRepo(w.repoUrl);
           const files = walkRepo(repoDir).slice(0, 2000);
           const usages = scanConsumer(files, changes);
@@ -157,6 +164,7 @@ const routes = {
     const interval = Math.max(MIN_INTERVAL_MIN, Number(b.intervalMinutes) || MIN_INTERVAL_MIN);
     if (watches.length >= MAX_WATCHES) return json(res, 429, { error: `watch limit ${MAX_WATCHES} reached` });
     if (watches.some((w) => w.url === b.url)) return json(res, 409, { error: 'url already watched' });
+    if (b.repoUrl && !allowRemoteClone()) return json(res, 422, { error: `repoUrl: ${REMOTE_CLONE_DISABLED}` });
     if (b.repoUrl) { try { await assertPublicUrl(b.repoUrl); } catch (e) { return json(res, 422, { error: `repoUrl: ${e.message}` }); } }
     const w = { id: randomUUID(), name: String(b.name).slice(0, 120), url: b.url, repoUrl: b.repoUrl ? String(b.repoUrl) : null, intervalMinutes: interval, createdAt: new Date().toISOString(), nextCheckAt: new Date(Date.now() + interval * 60000).toISOString(), lastCheckAt: null, lastResult: null };
     watches.push(w);

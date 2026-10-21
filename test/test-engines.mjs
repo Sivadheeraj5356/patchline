@@ -86,12 +86,12 @@ t('summary counts add up', s.breaking + s.additive === s.total && s.breaking >= 
 
 
 // ---- reconciliation hardening tests (cross-side ambiguity, dedupe, endpoint scope) ----
+const mkOp = (reqProps, respProps) => ({
+  params: [], responses: { '200': { schema: { properties: respProps } } }, requestSchema: { properties: reqProps },
+});
 {
   // response field 'status' renamed but request field 'status' retained:
   // text matching cannot tell a read from a write -> no inferred rename
-  const mkOp = (reqProps, respProps) => ({
-    params: [], responses: { '200': { schema: { properties: respProps } } }, requestSchema: { properties: reqProps },
-  });
   const v1 = { info: { version: '1' }, paths: { '/v1/x': { get: mkOp({ status: { type: 'string' } }, { status: { type: 'string' }, id: { type: 'string' } }) } } };
   const v2 = { info: { version: '2' }, paths: { '/v2/x': { get: mkOp({ status: { type: 'string' } }, { state: { type: 'string' }, id: { type: 'string' } }) } } };
   const ch = diffSpecs(v1, v2);
@@ -106,6 +106,16 @@ t('summary counts add up', s.breaking + s.additive === s.total && s.breaking >= 
   t('consistent cross-side rename kept on request side', ch2.some((c) => c.type === 'request_field_renamed' && c.from === 'amount_cents' && c.to === 'total_cents'));
 }
 {
+  // param rename colliding with a retained body field: suppressed to manual review
+  const p1 = { info: { version: '1' }, paths: { '/v1/z': { get: mkOp({ status: { type: 'string' } }, { id: { type: 'string' } }) } } };
+  p1.paths['/v1/z'].get.parameters = [{ name: 'status', in: 'query', schema: { type: 'string' }, required: false }];
+  const p2 = { info: { version: '2' }, paths: { '/v2/z': { get: mkOp({ status: { type: 'string' } }, { id: { type: 'string' } }) } } };
+  p2.paths['/v2/z'].get.parameters = [{ name: 'state', in: 'query', schema: { type: 'string' }, required: false }];
+  const chp = diffSpecs(p1, p2);
+  t('param/body leaf collision: no inferred param rename', !chp.some((c) => c.type === 'param_renamed' && c.from === 'status'));
+  t('param/body leaf collision: param removal kept for review', chp.some((c) => c.type === 'param_removed' && c.from === 'status'));
+  t('param/body leaf collision: new param flagged for manual review', chp.some((c) => c.type === 'param_added' && c.to === 'state' && c.kind === 'breaking'));
+
   // duplicate suggestions: same file/line/replacement from two changes (GET+POST schema) collapses to one
   const files2 = [{ name: 'a.js', content: "const r = await api.get('/v1/invoices', { limit: 20 });\n" }];
   const mkChange = (endpoint) => ({ kind: 'breaking', type: 'param_renamed', endpoint, from: 'limit', to: 'page_size', inferred: true, migration: 'm' });

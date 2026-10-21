@@ -37,12 +37,19 @@ Not proven / known limits:
   suggested, never auto-applied (opt-in `--apply-inferred`), and ambiguous
   cases (multiple candidates, or a name shared across request/response
   without a consistent cross-side mapping) stay removed+added.
-- Consumer scanning is text-based: it matches endpoint paths and leaf names,
-  not ASTs. Files that call no known endpoint are still scanned (uncertainty
-  beats a false clean); files calling a different known endpoint are excluded.
+- Files that call no known endpoint are still scanned (uncertainty beats a
+  false clean); files calling a different known endpoint are excluded.
 - Repo clone's DNS pre-check has a short TOCTOU window: git resolves DNS
-  itself. Redirects (initial only), submodules, file/ext protocols and
-  credential prompts are all disabled via git flags and a scrubbed env.
+  itself. Because of this, server-side remote cloning is DISABLED by default
+  (PATCHLINE_ALLOW_REMOTE_CLONE=1 opts in, intended for local/operator
+  deployments only) until a pinned archive-fetch + bounded extractor replaces
+  git clone on server paths. When cloning is enabled: redirects (initial
+  only), submodules, file/ext protocols and credential prompts are disabled
+  via git flags and a scrubbed env.
+- Consumer scanning is TEXT-BASED leaf matching, not AST analysis. A query
+  parameter and a body field sharing a name cannot be told apart in source
+  text, so such renames are never inferred: they are reported as
+  removed + added-for-review entries instead.
 - The CLI (`src/cli.mjs`) fetches spec URLs with plain fetch: it is a local
   developer tool run on the operator's own input; the SSRF guard covers the
   server's network-exposed paths.

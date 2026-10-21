@@ -174,15 +174,27 @@ export function diffSpecs(oldSpec, newSpec) {
     // params
     const oldP = Object.fromEntries(ep.params.map((x) => [x.name, x]));
     const newP = Object.fromEntries(nep.params.map((x) => [x.name, x]));
-    const pr = renameCandidate(
+    const prRaw = renameCandidate(
       Object.fromEntries(ep.params.map((x) => [x.name, { type: x.type }])),
       Object.fromEntries(nep.params.map((x) => [x.name, { type: x.type }]))
     );
+    const frRaw = renameCandidate(ep.responseFields, nep.responseFields);
+    const qrRaw = renameCandidate(ep.requestFields, nep.requestFields);
+    // param renames share consumer text with body fields: a param leaf that
+    // also names a request/response field is ambiguous unless a body pair
+    // maps the same leaf to the same target. Ambiguous -> manual review.
+    const bodyPairMap = new Map([...leafPairMap(frRaw.pairs), ...leafPairMap(qrRaw.pairs)]);
+    const bodyLeaves = collisionLeaves(ep.requestFields, nep.requestFields, ep.responseFields, nep.responseFields);
+    const pr = suppressCrossSideAmbiguity(prRaw, bodyLeaves, bodyPairMap);
+    const prDemotedAdded = pr.addedOnly.filter((a) => !prRaw.addedOnly.includes(a));
     for (const [a, b] of pr.pairs) {
       changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename "${a}" to "${b}" at call sites (inferred - confirm before applying).`, from: a, to: b, inferred: true });
     }
     for (const r of pr.removedOnly) {
       changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
+    }
+    for (const a of prDemotedAdded) {
+      changes.push({ kind: 'breaking', type: 'param_added', endpoint: key, detail: `Parameter "${a}" is new on ${newKey} and may be an ambiguous rename (its name collides with a body field) - manual review.`, migration: 'Manual review: text matching cannot distinguish this parameter from the same-named body field; confirm any rename by hand.', from: null, to: a });
     }
     // same-name params: required flip and type change
     for (const [name, op_] of Object.entries(oldP)) {
@@ -208,8 +220,6 @@ export function diffSpecs(oldSpec, newSpec) {
       }
     }
     // response fields
-    const frRaw = renameCandidate(ep.responseFields, nep.responseFields);
-    const qrRaw = renameCandidate(ep.requestFields, nep.requestFields);
     const fr = suppressCrossSideAmbiguity(frRaw, collisionLeaves(ep.requestFields, nep.requestFields), leafPairMap(qrRaw.pairs));
     for (const [a, b] of fr.pairs) {
       changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" appears renamed to "${b}" on ${newKey} (inferred, verify).`, migration: `Suggested: rename reads of "${a}" to "${b}" (inferred - confirm before applying).`, from: a, to: b, inferred: true });

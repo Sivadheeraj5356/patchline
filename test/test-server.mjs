@@ -161,6 +161,29 @@ await t('watch with repoUrl attaches consumer impact to change events', async ()
   await fetch(B + '/api/watches?id=' + created2.watch.id, { method: 'DELETE' });
 });
 
+await t('remote repoUrl clone disabled by default, allowed with explicit flag', async () => {
+  // default server (already running): http repoUrl refused with disabled message
+  const refused = await post('/api/watches', { name: 'gated-repo', url: fixtureUrl, repoUrl: 'http://127.0.0.1:9/repo.git', intervalMinutes: 1 });
+  ok(refused.error && /disabled/.test(refused.error), 'repoUrl refused while remote clone disabled: ' + JSON.stringify(refused));
+  // opt-in server: flag + test mode -> watch created with repoUrl stored
+  const child3 = spawn('node', [join(root, 'src/server.mjs')], {
+    env: { ...process.env, PORT: '18501', PATCHLINE_DATA: dataDir, PATCHLINE_MIN_INTERVAL_MIN: '1', PATCHLINE_ALLOW_PRIVATE: '1', PATCHLINE_ALLOW_REMOTE_CLONE: '1' },
+    stdio: 'pipe',
+  });
+  await new Promise((resolve, reject) => {
+    child3.stdout.on('data', (d) => { if (String(d).includes('patchline server on')) resolve(); });
+    setTimeout(() => reject(new Error('server3 start timeout')), 8000);
+  });
+  try {
+    const r3 = await fetch('http://127.0.0.1:18501/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'gated-repo-ok', url: fixtureUrl, repoUrl: 'http://127.0.0.1:9/repo.git', intervalMinutes: 1 }) });
+    const j3 = await r3.json();
+    ok(j3.watch && j3.watch.repoUrl === 'http://127.0.0.1:9/repo.git', 'repoUrl accepted with explicit flag: ' + JSON.stringify(j3).slice(0, 200));
+    await fetch('http://127.0.0.1:18501/api/watches?id=' + j3.watch.id, { method: 'DELETE' });
+  } finally {
+    child3.kill();
+  }
+});
+
 child.kill();
 fixture.close();
 console.log(`${passed} passed, ${failed} failed (fixture served ${hits} requests)`);
