@@ -71,7 +71,7 @@ try {
   const changes = diffSpecs(oldSpec, newSpec);
   result.result = { summary: summarize(changes), changes: changes.slice(0, 500) };
   if (repoUrl) {
-    const files = await fetchRepoArchive(repoUrl);
+    const files = await fetchRepoArchive(repoUrl, { token: process.env.GH_SCAN_TOKEN || null });
     const usages = scanConsumer(files, changes);
     const fixes = buildFixes(files, changes);
     result.result.impact = {
