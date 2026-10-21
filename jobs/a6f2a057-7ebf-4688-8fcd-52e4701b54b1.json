@@ -1,0 +1,18 @@
+{
+  "job_id": "a6f2a057-7ebf-4688-8fcd-52e4701b54b1",
+  "type": "analyze",
+  "status": "error",
+  "finishedAt": "2026-10-21T19:16:45.804Z",
+  "result": {
+    "summary": {
+      "breaking": 0,
+      "additive": 0,
+      "warnings": 0,
+      "review": 0,
+      "total": 0
+    },
+    "changes": []
+  },
+  "error": "HTTP 404 from https://codeload.github.com/Sivadheeraj5356/patchline/tar.gz/HEAD",
+  "truncated": false
+}
