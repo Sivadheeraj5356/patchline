@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patchline - Self-maintaining API clients</title>
+<style>
+  :root {
+    --bg: #0a0e14; --panel: #11161f; --panel2: #151b26; --line: #232c3b;
+    --text: #e8edf4; --dim: #8b96a8; --faint: #5b6678;
+    --accent: #5eead4; --accent-dim: #134e4a;
+    --break: #f87171; --break-bg: #2a1518; --add: #4ade80; --add-bg: #12251a;
+    --warn: #fbbf24; --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.6 -apple-system, "Inter", "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 90px; }
+  header { padding: 44px 0 8px; display: flex; align-items: baseline; gap: 14px; }
+  .logo { font-size: 24px; font-weight: 700; letter-spacing: -0.4px; }
+  .logo span { color: var(--accent); }
+  .tag { color: var(--dim); font-size: 14px; }
+  .sub { color: var(--dim); max-width: 720px; margin: 10px 0 30px; font-size: 15px; }
+  .sub b { color: var(--text); font-weight: 600; }
+  nav.steps { display: flex; gap: 8px; margin: 26px 0 30px; flex-wrap: wrap; }
+  nav.steps button {
+    background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+    padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;
+    transition: border-color .15s, color .15s;
+  }
+  nav.steps button .n { color: var(--faint); margin-right: 8px; font-family: var(--mono); font-size: 12px; }
+  nav.steps button.on { color: var(--text); border-color: var(--accent); background: var(--panel2); }
+  nav.steps button.on .n { color: var(--accent); }
+  nav.steps button:disabled { opacity: .45; cursor: not-allowed; }
+  section { display: none; }
+  section.on { display: block; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; margin-bottom: 18px; }
+  .card h2 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+  .card p.hint { color: var(--dim); font-size: 13.5px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-bottom: 8px; }
+  textarea, select, input[type=text] {
+    width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  }
+  textarea { min-height: 220px; resize: vertical; }
+  textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    background: var(--accent); color: #06201b; border: none; border-radius: 10px;
+    padding: 12px 22px; font-size: 14.5px; font-weight: 700; cursor: pointer; transition: filter .15s;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--dim); }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .pill.break { background: var(--break-bg); color: var(--break); }
+  .pill.add { background: var(--add-bg); color: var(--add); }
+  .pill.warn { background: #2a2113; color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td code, .inline-code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 2px 7px; border-radius: 6px; color: var(--accent); }
+  .mig { color: var(--dim); font-size: 12.5px; margin-top: 4px; }
+  .file-block { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .file-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: var(--panel2); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12.5px; }
+  .file-head .counts { color: var(--faint); font-size: 11.5px; }
+  pre.diff { padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; overflow-x: auto; }
+  .diff .ctx { color: var(--faint); }
+  .diff .del { color: var(--break); background: rgba(248,113,113,.07); display: block; }
+  .diff .addline { color: var(--add); background: rgba(74,222,128,.07); display: block; }
+  .diff .meta { color: var(--warn); display: block; margin-top: 8px; }
+  .manual-item { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--warn); }
+  .manual-item code { color: var(--text); }
+  pre.pr { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 20px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; max-height: 560px; overflow: auto; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+  @media (max-width: 860px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+  .urlrow { display: flex; gap: 8px; margin-bottom: 8px; }
+  .urlrow input { flex: 1; }
+  .urlrow .btn { padding: 8px 14px; font-size: 12.5px; }
+  .pill.review { background: #2a2113; color: var(--warn); }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .stat .v { font-size: 26px; font-weight: 700; font-family: var(--mono); }
+  .stat .k { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .stat.break .v { color: var(--break); } .stat.add .v { color: var(--add); } .stat.warn .v { color: var(--warn); }
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+  .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 10px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">Patch<span>line</span></div>
+    <div class="tag">Self-maintaining API clients</div>
+  </header>
+  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase, and drafts the migration pull request - <b>deterministically, no AI inference</b>. It reads real OpenAPI 3.x documents (YAML or JSON, $refs resolved) and can watch a live spec URL for changes. The sample below is a fictional billing API.</p>
+
+  <nav class="steps">
+    <button data-step="1" class="on"><span class="n">01</span>Specs</button>
+    <button data-step="2" disabled><span class="n">02</span>API diff</button>
+    <button data-step="3" disabled><span class="n">03</span>Consumer impact</button>
+    <button data-step="4" disabled><span class="n">04</span>Fix PR</button>
+    <button data-step="5" id="watchTab" style="display:none"><span class="n">05</span>Watch</button>
+  </nav>
+
+  <section id="s1" class="on">
+    <div class="card">
+      <h2>Choose the spec pair</h2>
+      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. Paste any <b>OpenAPI 3.x spec (YAML or JSON)</b> - <code>$ref</code>s, request bodies and content-wrapped schemas are resolved. <span id="modeNote"></span></p>
+      <div class="grid2">
+        <div>
+          <label>Old spec - <span id="oldVerLabel"></span></label>
+          <div class="urlrow"><input type="text" id="oldUrl" placeholder="https://.../openapi.yaml"><button class="btn ghost" id="loadOldUrl">Load URL</button></div>
+          <textarea id="oldSpec" spellcheck="false"></textarea>
+        </div>
+        <div>
+          <label>New spec - <span id="newVerLabel"></span></label>
+          <div class="urlrow"><input type="text" id="newUrl" placeholder="https://.../openapi.yaml"><button class="btn ghost" id="loadNewUrl">Load URL</button></div>
+          <textarea id="newSpec" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn" id="runDiff">Run the diff</button>
+        <button class="btn ghost" id="resetSpecs">Reset to sample</button>
+        <span id="specError" style="color:var(--break);font-size:13px"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="s2">
+    <div class="stat-row" id="statRow"></div>
+    <div class="card">
+      <h2>Detected changes</h2>
+      <p class="hint">Rule-based classification: removed endpoints and renamed fields are breaking; new endpoints and optional fields are additive.</p>
+      <table id="changeTable"><thead><tr><th style="width:90px">Kind</th><th style="width:190px">Type</th><th>Detail</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="row"><button class="btn" id="toImpact">Scan the consumer codebase</button></div>
+  </section>
+
+  <section id="s3">
+    <div class="card">
+      <h2>Consumer codebase impact</h2>
+      <p class="hint">The sample consumer is a 4-file JS app calling the old API. Patchline flags lines matching the detected breaking-change patterns and proposes safe mechanical edits. Removed endpoints are never auto-rewritten - they are flagged for manual review.</p>
+      <div id="impactList"></div>
+    </div>
+    <div class="row"><button class="btn" id="toPR">Generate the migration PR</button></div>
+  </section>
+
+  <section id="s4">
+    <div class="card">
+      <h2>Draft pull request</h2>
+      <p class="hint">This is the artifact a provider's update agent would open against the customer repo - or what a neutral "Dependabot for APIs" service would file.</p>
+      <pre class="pr" id="prOut"></pre>
+      <div class="row">
+        <button class="btn" id="copyPR">Copy PR markdown</button>
+        <button class="btn ghost" id="dlPR">Download .md</button>
+        <button class="btn ghost" id="dlJSON">Download analysis .json</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="s5">
+    <div class="card">
+      <h2>Watch a live API spec</h2>
+      <p class="hint">Patchline polls the spec URL on the interval you set (minimum <span id="minInt">60</span> minutes, with conditional requests so unchanged specs cost one cheap 304), saves a baseline, and records a diff event whenever the served spec actually changes.</p>
+      <div class="row" style="margin-top:0;margin-bottom:14px">
+        <input type="text" id="wName" placeholder="Name (e.g. Acme Payments)" style="max-width:240px">
+        <input type="text" id="wUrl" placeholder="https://.../openapi.yaml" style="max-width:340px">
+        <input type="text" id="wInt" placeholder="Minutes" style="max-width:100px">
+        <button class="btn" id="addWatch">Add watch</button>
+      </div>
+      <div id="watchError" style="color:var(--break);font-size:13px;margin-bottom:10px"></div>
+      <table id="watchTable"><thead><tr><th>Name</th><th>URL</th><th style="width:90px">Interval</th><th style="width:170px">Last check</th><th>Result</th><th style="width:150px"></th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h2>Change events</h2>
+      <p class="hint">Recorded when a watched spec actually changes. Each event is the full breaking/additive/warning diff between the old snapshot and the new one.</p>
+      <div id="eventList"></div>
+    </div>
+  </section>
+
+  <footer>
+    Patchline &middot; fictional sample API and consumer app &middot; all analysis is deterministic rules over the specs you provide - no AI inference &middot; in hosted mode, specs you load by URL and watches you add are processed by this server &middot; detection tools like oasdiff already exist - the wedge here is the <i>application</i> layer: scanning consumer code and drafting the fix.<br>
+    Built for the YC Fall 2026 RFS idea "Self-Maintaining APIs". A YC request signals partner interest, not validated demand.
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script id="fixtures" type="application/json">{"oldSpec": {"openapi": "3.0.0", "info": {"title": "Northwind Billing API", "version": "1.8.1"}, "paths": {"/v1/invoices": {"get": {"operationId": "listInvoices", "parameters": [{"name": "limit", "in": "query", "required": false, "schema": {"type": "integer"}}, {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["draft", "pending", "paid", "void"]}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"invoices": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "amount_cents": {"type": "integer"}, "status": {"type": "string", "enum": ["draft", "pending", "paid", "void"]}, "customer_email": {"type": "string"}}, "required": ["id", "amount_cents", "status"]}}}, "required": ["invoices"]}}}}, "post": {"operationId": "createInvoice", "parameters": [], "requestSchema": {"type": "object", "properties": {"customer_email": {"type": "string"}, "amount_cents": {"type": "integer"}}, "required": ["customer_email", "amount_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "amount_cents": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "amount_cents", "status"]}}}}}, "/v1/charges": {"post": {"operationId": "createCharge", "parameters": [], "requestSchema": {"type": "object", "properties": {"card_token": {"type": "string"}, "amount_cents": {"type": "integer"}}, "required": ["card_token", "amount_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "status": {"type": "string"}}, "required": ["id", "status"]}}}}}}}, "newSpec": {"openapi": "3.0.0", "info": {"title": "Northwind Billing API", "version": "2.0.0"}, "paths": {"/v2/invoices": {"get": {"operationId": "listInvoices", "parameters": [{"name": "page_size", "in": "query", "required": false, "schema": {"type": "integer"}}, {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["draft", "open", "paid", "void"]}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"invoices": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "total_cents": {"type": "integer"}, "status": {"type": "string", "enum": ["draft", "open", "paid", "void"]}, "customer_email": {"type": "string"}}, "required": ["id", "total_cents", "status"]}}}, "required": ["invoices"]}}}}, "post": {"operationId": "createInvoice", "parameters": [], "requestSchema": {"type": "object", "properties": {"customer_email": {"type": "string"}, "total_cents": {"type": "integer"}}, "required": ["customer_email", "total_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "total_cents": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "total_cents", "status"]}}}}}, "/v2/customers/{id}/balance": {"get": {"operationId": "getCustomerBalance", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"balance_cents": {"type": "integer"}}, "required": ["balance_cents"]}}}}}}}, "consumer": [{"name": "charges.js", "content": "import { api } from './client.js';\n\n// Charge a card token directly\nexport async function chargeCard(cardToken, amountCents) {\n  const res = await api.post('/v1/charges', { card_token: cardToken, amount_cents: amountCents });\n  return res.status === 'succeeded';\n}\n"}, {"name": "client.js", "content": "// Thin wrapper around fetch for the Northwind Billing API\nexport const api = {\n  base: 'https://api.northwind.example',\n  async get(path, opts = {}) {\n    const q = opts.params ? '?' + new URLSearchParams(opts.params) : '';\n    const r = await fetch(this.base + path + q, { headers: this.headers() });\n    return r.json();\n  },\n  async post(path, body) {\n    const r = await fetch(this.base + path, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });\n    return r.json();\n  },\n  headers() { return { 'Authorization': 'Bearer ' + process.env.NORTHWIND_KEY, 'Content-Type': 'application/json' }; },\n};\n"}, {"name": "dashboard.js", "content": "import { listPendingInvoices } from './invoices.js';\n\nexport async function renderDashboard() {\n  const rows = await listPendingInvoices();\n  for (const row of rows) {\n    console.log(`Invoice ${row.id}: $${row.total} (${row.state})`);\n  }\n}\n"}, {"name": "invoices.js", "content": "import { api } from './client.js';\n\n// List recent pending invoices for the dashboard\nexport async function listPendingInvoices() {\n  const res = await api.get('/v1/invoices', { params: { limit: 20, status: 'pending' } });\n  return res.invoices.map((inv) => ({\n    id: inv.id,\n    total: inv.amount_cents / 100,\n    state: inv.status,\n  }));\n}\n\nexport async function createInvoice(email, amountCents) {\n  const res = await api.post('/v1/invoices', { customer_email: email, amount_cents: amountCents });\n  return res.id;\n}\n"}]}</script>
+<script>
+"use strict";
+/*__PATCHLINE_ENGINES__*/
+
+// ---------- app wiring ----------
+const FIX = JSON.parse(document.getElementById('fixtures').textContent);
+const $ = (id) => document.getElementById(id);
+let state = { changes: null, files: FIX.consumer, fixes: null, oldSpec: null, newSpec: null };
+
+function loadSample() {
+  $('specError').textContent = '';
+  $('oldSpec').value = JSON.stringify(FIX.oldSpec, null, 2);
+  $('newSpec').value = JSON.stringify(FIX.newSpec, null, 2);
+  $('oldVerLabel').textContent = FIX.oldSpec.info.title + ' v' + FIX.oldSpec.info.version;
+  $('newVerLabel').textContent = FIX.newSpec.info.title + ' v' + FIX.newSpec.info.version;
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+function go(step) {
+  document.querySelectorAll('nav.steps button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.step === String(step));
+    if (Number(b.dataset.step) <= step) b.disabled = false;
+  });
+  document.querySelectorAll('section').forEach((s) => s.classList.toggle('on', s.id === 's' + step));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+document.querySelectorAll('nav.steps button').forEach((b) => b.addEventListener('click', () => { if (!b.disabled) go(b.dataset.step); }));
+$('resetSpecs').addEventListener('click', loadSample);
+
+const SERVER = location.protocol.startsWith('http');
+
+async function normalizeInput(text) {
+  if (!SERVER) {
+    // standalone file:// mode: JSON only, no $ref resolution (hosted app handles those)
+    return JSON.parse(text);
+  }
+  const res = await fetch('/api/parse', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'parse failed');
+  return body.spec;
+}
+
+$('runDiff').addEventListener('click', async () => {
+  $('specError').textContent = '';
+  try {
+    state.oldSpec = await normalizeInput($('oldSpec').value);
+    state.newSpec = await normalizeInput($('newSpec').value);
+  } catch (e) { $('specError').textContent = e.message; return; }
+  state.changes = diffSpecs(state.oldSpec, state.newSpec);
+  renderDiff();
+  go(2);
+});
+
+async function loadUrl_into(urlInput, ta, label) {
+  const url = $(urlInput).value.trim();
+  if (!url) return;
+  if (!SERVER) { $('specError').textContent = 'Loading from a URL needs the hosted app (the standalone page cannot make network calls).'; return; }
+  $('specError').textContent = 'Loading ' + url + ' ...';
+  try {
+    const res = await fetch('/api/fetch-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || 'fetch failed');
+    if (body.text === null) { $('specError').textContent = 'Not modified (the server already has this version cached); reload the page to re-fetch.'; return; }
+    $(ta).value = body.text;
+    try {
+      const doc = JSON.parse(body.text);
+      if (doc.info) $(label).textContent = doc.info.title + ' v' + doc.info.version;
+    } catch { /* YAML: label set after parse */ }
+    $('specError').textContent = '';
+  } catch (e) { $('specError').textContent = e.message; }
+}
+$('loadOldUrl').addEventListener('click', () => loadUrl_into('oldUrl', 'oldSpec', 'oldVerLabel'));
+$('loadNewUrl').addEventListener('click', () => loadUrl_into('newUrl', 'newSpec', 'newVerLabel'));
+
+function renderDiff() {
+  const s = summarize(state.changes);
+  $('statRow').innerHTML =
+    `<div class="stat break"><div class="v">${s.breaking}</div><div class="k">breaking</div></div>` +
+    `<div class="stat add"><div class="v">${s.additive}</div><div class="k">additive</div></div>` +
+    `<div class="stat warn"><div class="v">${s.warnings}</div><div class="k">warnings</div></div>` +
+    `<div class="stat warn"><div class="v">${s.review}</div><div class="k">need human judgment</div></div>`;
+  const tb = document.querySelector('#changeTable tbody');
+  tb.innerHTML = '';
+  for (const c of state.changes) {
+    const tr = document.createElement('tr');
+    const pillClass = c.kind === 'breaking' ? 'break' : (c.kind === 'warning' ? 'warn' : 'add');
+    const reviewBadge = c.review ? ' <span class="pill review">manual review</span>' : '';
+    tr.innerHTML = `<td><span class="pill ${pillClass}">${c.kind}</span>${reviewBadge}</td>` +
+      `<td><span class="inline-code">${c.type}</span></td>` +
+      `<td>${c.detail}<div class="mig">&rarr; ${c.migration}</div></td>`;
+    tb.appendChild(tr);
+  }
+}
+
+$('toImpact').addEventListener('click', () => {
+  state.fixes = buildFixes(state.files, state.changes);
+  renderImpact();
+  go(3);
+});
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+function renderImpact() {
+  const box = $('impactList'); box.innerHTML = '';
+  const usages = scanConsumer(state.files, state.changes);
+  const byFile = new Set(usages.map((u) => u.file));
+  if (!state.fixes.length) { box.innerHTML = '<p style="color:var(--dim)">No call sites affected. This consumer is already compatible.</p>'; return; }
+  for (const f of state.fixes) {
+    const div = document.createElement('div');
+    div.className = 'file-block';
+    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${f.manual.length} manual</span></div>`;
+    if (f.edits.length) {
+      inner += '<pre class="diff">';
+      for (const e of f.edits) {
+        inner += `<span class="meta">@@ line ${e.line} - ${esc(e.applied.join('; '))}</span>`;
+        inner += `<span class="del">- ${esc(e.before.trim())}</span>`;
+        inner += `<span class="addline">+ ${esc(e.after.trim())}</span>`;
+      }
+      inner += '</pre>';
+    }
+    for (const mn of f.manual) {
+      inner += `<div class="manual-item">&#9888; Manual review, line ${mn.line}: <code>${esc(mn.text)}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(mn.reason)}</span></div>`;
+    }
+    div.innerHTML = inner;
+    box.appendChild(div);
+  }
+  const untouched = state.files.filter((f) => !byFile.has(f.name));
+  if (untouched.length) {
+    const p = document.createElement('p');
+    p.style.cssText = 'color:var(--faint);font-size:13px;margin-top:6px';
+    p.textContent = 'Untouched by breaking changes: ' + untouched.map((f) => f.name).join(', ');
+    box.appendChild(p);
+  }
+}
+
+$('toPR').addEventListener('click', () => {
+  const pr = buildPR({
+    oldVersion: state.oldSpec.info.version, newVersion: state.newSpec.info.version,
+    apiTitle: state.oldSpec.info.title, changes: state.changes, fixes: state.fixes,
+  });
+  $('prOut').textContent = pr;
+  go(4);
+});
+
+$('copyPR').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('prOut').textContent); toast('PR markdown copied'); }
+  catch { toast('Copy blocked by browser - select the text manually'); }
+});
+// ---- watch tab (hosted mode only) ----
+if (SERVER) {
+  $('watchTab').style.display = '';
+  $('modeNote').textContent = 'Hosted mode: you can paste YAML, load specs from URLs, and set up live watches (step 05).';
+} else {
+  $('modeNote').textContent = 'Standalone mode: paste JSON specs. The hosted app adds YAML, URL loading and live watches.';
+}
+
+async function refreshWatches() {
+  if (!SERVER) return;
+  const [{ watches, minIntervalMinutes }, { events }] = await Promise.all([
+    fetch('/api/watches').then((r) => r.json()),
+    fetch('/api/events').then((r) => r.json()),
+  ]);
+  $('minInt').textContent = minIntervalMinutes;
+  const tb = document.querySelector('#watchTable tbody');
+  tb.innerHTML = '';
+  for (const w of watches) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><b>${esc(w.name)}</b></td><td><span class="inline-code">${esc(w.url)}</span></td>` +
+      `<td>${w.intervalMinutes}m</td><td>${w.lastCheckAt ? new Date(w.lastCheckAt).toLocaleString() : 'never'}</td>` +
+      `<td>${esc(w.lastResult || '-')}</td>` +
+      `<td><button class="btn ghost" data-check="${w.id}">Check now</button> <button class="btn ghost" data-del="${w.id}">Delete</button></td>`;
+    tb.appendChild(tr);
+  }
+  tb.querySelectorAll('[data-check]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    await fetch('/api/watches/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: b.dataset.check }) });
+    await refreshWatches();
+  }));
+  tb.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+    await fetch('/api/watches?id=' + b.dataset.del, { method: 'DELETE' });
+    await refreshWatches();
+  }));
+  const el = $('eventList');
+  el.innerHTML = events.length ? '' : '<p class="hint">No change events recorded yet.</p>';
+  for (const ev of events) {
+    const d = document.createElement('div');
+    d.className = 'file-block';
+    d.innerHTML = `<div class="file-head"><span><b>${esc(ev.watchName)}</b> &middot; ${new Date(ev.at).toLocaleString()} &middot; v${esc(ev.oldVersion || '?')} &rarr; v${esc(ev.newVersion || '?')}</span>` +
+      `<span class="counts">${ev.summary.breaking} breaking &middot; ${ev.summary.additive} additive &middot; ${ev.summary.warnings} warnings &middot; ${ev.summary.review} need review</span></div>`;
+    el.appendChild(d);
+  }
+}
+
+$('addWatch').addEventListener('click', async () => {
+  $('watchError').textContent = '';
+  const body = { name: $('wName').value.trim(), url: $('wUrl').value.trim(), intervalMinutes: Number($('wInt').value) || undefined };
+  const res = await fetch('/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const out = await res.json();
+  if (!res.ok) { $('watchError').textContent = out.error || 'failed'; return; }
+  $('wName').value = ''; $('wUrl').value = ''; $('wInt').value = '';
+  toast(out.baseline === 'baseline' ? 'Watch added, baseline saved' : 'Watch added');
+  await refreshWatches();
+});
+
+const origGo = go;
+go = function (step) { origGo(step); if (String(step) === '5') refreshWatches(); };
+
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('dlPR').addEventListener('click', () => download('patchline-migration-pr.md', $('prOut').textContent, 'text/markdown'));
+$('dlJSON').addEventListener('click', () => download('patchline-analysis.json', JSON.stringify({ changes: state.changes, fixes: state.fixes }, null, 2), 'application/json'));
+
+loadSample();
+</script>
+</body>
+</html>

@@ -13,6 +13,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "puppeteer-core": "^25.15.0",
     "yaml": "^2.9.1"
   }
 }

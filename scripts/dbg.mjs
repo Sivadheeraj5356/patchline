@@ -1,0 +1,13 @@
+import puppeteer from 'puppeteer-core';
+const browser = await puppeteer.launch({ executablePath: '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox','--disable-dev-shm-usage'] });
+const page = await browser.newPage();
+const errors = [];
+page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+await page.goto('http://localhost:8484/', { waitUntil: 'networkidle0' });
+await page.click('#runDiff');
+await new Promise((r) => setTimeout(r, 1200));
+console.log('specError:', await page.evaluate(() => document.querySelector('#specError').textContent));
+console.log('s2 on?', await page.evaluate(() => document.querySelector('#s2').className));
+console.log('changes count:', await page.evaluate(() => document.querySelectorAll('#changeTable tbody tr').length));
+console.log('errors:', errors.join(' | ') || 'none');
+await browser.close();
