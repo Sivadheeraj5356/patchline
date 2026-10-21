@@ -62,6 +62,8 @@ jobs:
           ref: patchline-data
           path: data
       - name: Run job (validated inside)
+        env:
+          GH_SCAN_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/actions-job.mjs --job job.json --data data
       - name: Commit result
         working-directory: data
