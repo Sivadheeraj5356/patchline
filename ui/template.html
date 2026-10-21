@@ -391,8 +391,14 @@ async function refreshWatches() {
   for (const ev of events) {
     const d = document.createElement('div');
     d.className = 'file-block';
+    let impactLine = '';
+    if (ev.impact && !ev.impact.error) {
+      impactLine = `<div class="manual-item">Consumer impact (${esc(ev.impact.repoUrl)}): ${ev.impact.affectedLines} affected line(s) across ${ev.impact.scannedFiles} scanned file(s) &middot; ${ev.impact.proposedEdits} edits &middot; ${ev.impact.inferredSuggestions} inferred &middot; ${ev.impact.manualSpots} manual</div>`;
+    } else if (ev.impact && ev.impact.error) {
+      impactLine = `<div class="manual-item">Consumer impact failed: ${esc(ev.impact.error)}</div>`;
+    }
     d.innerHTML = `<div class="file-head"><span><b>${esc(ev.watchName)}</b> &middot; ${new Date(ev.at).toLocaleString()} &middot; v${esc(ev.oldVersion || '?')} &rarr; v${esc(ev.newVersion || '?')}</span>` +
-      `<span class="counts">${ev.summary.breaking} breaking &middot; ${ev.summary.additive} additive &middot; ${ev.summary.warnings} warnings &middot; ${ev.summary.review} need review</span></div>`;
+      `<span class="counts">${ev.summary.breaking} breaking &middot; ${ev.summary.additive} additive &middot; ${ev.summary.warnings} warnings &middot; ${ev.summary.review} need review</span></div>${impactLine}`;
     el.appendChild(d);
   }
 }
