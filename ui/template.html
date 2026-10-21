@@ -91,31 +91,60 @@
 </style>
 <script>
 // Shared-key gate client: when the server has PATCHLINE_AUTH_KEY set, every
-// /api call needs x-patchline-key. The key is prompted once and kept in
-// sessionStorage (tab-local, never written anywhere else).
+// /api call needs x-patchline-key. On a 401 an inline unlock overlay asks for
+// the key once; it is kept in sessionStorage (tab-local, never sent anywhere
+// except this server's /api routes).
 (() => {
-  const origFetch = window.fetch.bind(window);
-  window.fetch = async (url, opts = {}) => {
-    if (typeof url === 'string' && url.startsWith('/api/') && url !== '/api/health') {
-      let key = sessionStorage.getItem('patchline-key');
-      if (key) {
-        opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
-      }
-      let res = await origFetch(url, opts);
-      if (res.status === 401) {
-        key = window.prompt('This Patchline server needs its access key (x-patchline-key):');
-        if (key) {
-          sessionStorage.setItem('patchline-key', key);
-          opts.headers = Object.assign({}, opts.headers, { 'x-patchline-key': key });
-          res = await origFetch(url, opts);
-        }
-      }
-      return res;
-    }
-    return origFetch(url, opts);
+  const overlay = document.createElement('div');
+  overlay.id = 'unlockOverlay';
+  overlay.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(10,12,16,.72);z-index:9999;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:24px;max-width:420px;width:90%;color:#e6edf3;font-family:inherit;">
+      <h2 style="margin:0 0 8px;font-size:17px;">This Patchline server is private</h2>
+      <p style="margin:0 0 14px;color:#9da7b3;font-size:13px;">Enter the access key (the server was started with PATCHLINE_AUTH_KEY). The key stays in this tab's session storage only.</p>
+      <input id="unlockKey" type="password" placeholder="access key" autocomplete="off" style="width:100%;box-sizing:border-box;padding:9px 10px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;font-size:14px;" />
+      <div id="unlockError" style="display:none;color:#f47067;font-size:13px;margin-top:8px;">Wrong key - the server refused it. Try again.</div>
+      <button id="unlockGo" style="margin-top:14px;padding:9px 18px;border-radius:6px;border:0;background:#238636;color:#fff;font-size:14px;cursor:pointer;">Unlock</button>
+    </div>`;
+  document.addEventListener('DOMContentLoaded', () => document.body.appendChild(overlay));
+
+  let pending = null; // {url, opts, resolve}
+  const attempt = (url, opts) => {
+    const key = sessionStorage.getItem('patchline-key');
+    const o = Object.assign({}, opts);
+    if (key) o.headers = Object.assign({}, o.headers, { 'x-patchline-key': key });
+    return window.__origFetch(url, o);
   };
-})();
-</script>
+  window.__origFetch = window.fetch.bind(window);
+  window.fetch = (url, opts = {}) => {
+    if (!(typeof url === 'string' && url.startsWith('/api/') && url !== '/api/health')) {
+      return window.__origFetch(url, opts);
+    }
+    return attempt(url, opts).then((res) => {
+      if (res.status !== 401) return res;
+      // show the unlock overlay and retry after a successful unlock
+      return new Promise((resolve) => { pending = { url, opts, resolve }; overlay.style.display = 'flex'; const inp = overlay.querySelector('#unlockKey'); if (inp) setTimeout(() => inp.focus(), 50); });
+    });
+  };
+  overlay.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'unlockGo') {
+      const key = overlay.querySelector('#unlockKey').value.trim();
+      if (!key || !pending) return;
+      sessionStorage.setItem('patchline-key', key);
+      attempt(pending.url, pending.opts).then((res) => {
+        if (res.status === 401) {
+          overlay.querySelector('#unlockError').style.display = 'block';
+          return; // keep overlay up
+        }
+        overlay.querySelector('#unlockError').style.display = 'none';
+        overlay.style.display = 'none';
+        const p = pending; pending = null;
+        p.resolve(res);
+      });
+    }
+  });
+  overlay.addEventListener('keydown', (e) => { if (e.key === 'Enter') overlay.querySelector('#unlockGo').click(); });
+})();</script>
 </head>
 <body>
 <div class="wrap">
