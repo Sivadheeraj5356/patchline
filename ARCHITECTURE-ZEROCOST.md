@@ -91,14 +91,20 @@ Candidate shape ("read-through worker", no scan on the host):
    c. Static export mode: the server gains an export command that renders
       state to static files; the host serves those files verbatim.
 
+Emulation result (2026-10-22, local workerd/miniflare, no account created):
+- A candidate read-through worker serving the real 60KB UI HTML plus a
+  realistic 350KB precomputed state JSON (150 events with diffs) behind the
+  same timing-safe key gate measured: p50 ~0ms, p95 1ms, p99 1ms, max 2ms
+  handler time over 200 requests (workerd, warm; Buffer-free constant-time
+  compare). Comfortably inside a 10ms free CPU budget.
+- Honesty limits of this measurement: handler wall time via performance.now
+  in local workerd, NOT a host's billed CPU metric; cold starts excluded;
+  no account exists anywhere yet.
+
 What remains unverified (do not present as decided):
-- Whether any specific free host's CPU/quota fits this shape in practice -
-  needs local emulation measurement first (free, no account), then an owner
-  decision before any account is created anywhere.
+- Real deployment on any host - needs an owner decision before any account
+  is created; emulation only shows the shape is CPU-plausible.
 - State-transfer option (a/b/c) - needs measurement of payload sizes and
   freshness requirements.
 - Custom domain/TLS and whether the user's profile link should point at a
   hosted demo at all (user decision, gated on product completion).
-
-Next unblocked step: local emulation measurement of the read path (1-3ms
-band) on a candidate free-host runtime, without creating any account.
