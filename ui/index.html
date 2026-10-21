@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patchline - Self-maintaining API clients</title>
+<style>
+  :root {
+    --bg: #0a0e14; --panel: #11161f; --panel2: #151b26; --line: #232c3b;
+    --text: #e8edf4; --dim: #8b96a8; --faint: #5b6678;
+    --accent: #5eead4; --accent-dim: #134e4a;
+    --break: #f87171; --break-bg: #2a1518; --add: #4ade80; --add-bg: #12251a;
+    --warn: #fbbf24; --mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font: 15px/1.6 -apple-system, "Inter", "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 90px; }
+  header { padding: 44px 0 8px; display: flex; align-items: baseline; gap: 14px; }
+  .logo { font-size: 24px; font-weight: 700; letter-spacing: -0.4px; }
+  .logo span { color: var(--accent); }
+  .tag { color: var(--dim); font-size: 14px; }
+  .sub { color: var(--dim); max-width: 720px; margin: 10px 0 30px; font-size: 15px; }
+  .sub b { color: var(--text); font-weight: 600; }
+  nav.steps { display: flex; gap: 8px; margin: 26px 0 30px; flex-wrap: wrap; }
+  nav.steps button {
+    background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+    padding: 10px 18px; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600;
+    transition: border-color .15s, color .15s;
+  }
+  nav.steps button .n { color: var(--faint); margin-right: 8px; font-family: var(--mono); font-size: 12px; }
+  nav.steps button.on { color: var(--text); border-color: var(--accent); background: var(--panel2); }
+  nav.steps button.on .n { color: var(--accent); }
+  nav.steps button:disabled { opacity: .45; cursor: not-allowed; }
+  section { display: none; }
+  section.on { display: block; animation: fade .25s ease; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; margin-bottom: 18px; }
+  .card h2 { font-size: 17px; font-weight: 700; margin-bottom: 6px; }
+  .card p.hint { color: var(--dim); font-size: 13.5px; margin-bottom: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); margin-bottom: 8px; }
+  textarea, select, input[type=text] {
+    width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+  }
+  textarea { min-height: 220px; resize: vertical; }
+  textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    background: var(--accent); color: #06201b; border: none; border-radius: 10px;
+    padding: 12px 22px; font-size: 14.5px; font-weight: 700; cursor: pointer; transition: filter .15s;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--line); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--dim); }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+  .pill.break { background: var(--break-bg); color: var(--break); }
+  .pill.add { background: var(--add-bg); color: var(--add); }
+  .pill.warn { background: #2a2113; color: var(--warn); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--faint); font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td code, .inline-code { font-family: var(--mono); font-size: 12px; background: var(--bg); padding: 2px 7px; border-radius: 6px; color: var(--accent); }
+  .mig { color: var(--dim); font-size: 12.5px; margin-top: 4px; }
+  .file-block { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .file-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: var(--panel2); border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12.5px; }
+  .file-head .counts { color: var(--faint); font-size: 11.5px; }
+  pre.diff { padding: 14px 16px; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; overflow-x: auto; }
+  .diff .ctx { color: var(--faint); }
+  .diff .del { color: var(--break); background: rgba(248,113,113,.07); display: block; }
+  .diff .addline { color: var(--add); background: rgba(74,222,128,.07); display: block; }
+  .diff .meta { color: var(--warn); display: block; margin-top: 8px; }
+  .manual-item { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--warn); }
+  .manual-item code { color: var(--text); }
+  pre.pr { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 20px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; max-height: 560px; overflow: auto; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px; }
+  @media (max-width: 860px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .stat .v { font-size: 26px; font-weight: 700; font-family: var(--mono); }
+  .stat .k { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .stat.break .v { color: var(--break); } .stat.add .v { color: var(--add); } .stat.warn .v { color: var(--warn); }
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12.5px; line-height: 1.7; }
+  .toast { position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%); background: var(--panel2); border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 10px; font-size: 13.5px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">Patch<span>line</span></div>
+    <div class="tag">Self-maintaining API clients</div>
+  </header>
+  <p class="sub">An API provider ships a breaking change. Patchline diffs the old and new specs, flags affected call sites in the consumer codebase for the change patterns it supports, and drafts the migration pull request - <b>deterministically, with no AI inference and no network calls</b>. The demo below runs entirely in this page on a fictional billing API.</p>
+
+  <nav class="steps">
+    <button data-step="1" class="on"><span class="n">01</span>Specs</button>
+    <button data-step="2" disabled><span class="n">02</span>API diff</button>
+    <button data-step="3" disabled><span class="n">03</span>Consumer impact</button>
+    <button data-step="4" disabled><span class="n">04</span>Fix PR</button>
+  </nav>
+
+  <section id="s1" class="on">
+    <div class="card">
+      <h2>Choose the spec pair</h2>
+      <p class="hint">The sample pair is the fictional <b>Northwind Billing API v1.8.1 &rarr; v2.0.0</b>. You can also paste your own pair in the same simplified JSON shape (paths, operations, parameters, request/response schemas).</p>
+      <div class="grid2">
+        <div>
+          <label>Old spec - <span id="oldVerLabel"></span></label>
+          <textarea id="oldSpec" spellcheck="false"></textarea>
+        </div>
+        <div>
+          <label>New spec - <span id="newVerLabel"></span></label>
+          <textarea id="newSpec" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn" id="runDiff">Run the diff</button>
+        <button class="btn ghost" id="resetSpecs">Reset to sample</button>
+        <span id="specError" style="color:var(--break);font-size:13px"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="s2">
+    <div class="stat-row" id="statRow"></div>
+    <div class="card">
+      <h2>Detected changes</h2>
+      <p class="hint">Rule-based classification: removed endpoints and renamed fields are breaking; new endpoints and optional fields are additive.</p>
+      <table id="changeTable"><thead><tr><th style="width:90px">Kind</th><th style="width:190px">Type</th><th>Detail</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="row"><button class="btn" id="toImpact">Scan the consumer codebase</button></div>
+  </section>
+
+  <section id="s3">
+    <div class="card">
+      <h2>Consumer codebase impact</h2>
+      <p class="hint">The sample consumer is a 4-file JS app calling the old API. Patchline flags lines matching the detected breaking-change patterns and proposes safe mechanical edits. Removed endpoints are never auto-rewritten - they are flagged for manual review.</p>
+      <div id="impactList"></div>
+    </div>
+    <div class="row"><button class="btn" id="toPR">Generate the migration PR</button></div>
+  </section>
+
+  <section id="s4">
+    <div class="card">
+      <h2>Draft pull request</h2>
+      <p class="hint">This is the artifact a provider's update agent would open against the customer repo - or what a neutral "Dependabot for APIs" service would file.</p>
+      <pre class="pr" id="prOut"></pre>
+      <div class="row">
+        <button class="btn" id="copyPR">Copy PR markdown</button>
+        <button class="btn ghost" id="dlPR">Download .md</button>
+        <button class="btn ghost" id="dlJSON">Download analysis .json</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Patchline demo &middot; fictional sample API and consumer app &middot; all analysis is deterministic rules over the JSON you provide; nothing leaves this page &middot; detection tools like oasdiff already exist - the wedge here is the <i>application</i> layer: scanning consumer code and drafting the fix.<br>
+    Built as a working prototype for the YC Fall 2026 RFS idea "Self-Maintaining APIs". A YC request signals partner interest, not validated demand.
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+
+<script id="fixtures" type="application/json">{"oldSpec": {"openapi": "3.0.0", "info": {"title": "Northwind Billing API", "version": "1.8.1"}, "paths": {"/v1/invoices": {"get": {"operationId": "listInvoices", "parameters": [{"name": "limit", "in": "query", "required": false, "schema": {"type": "integer"}}, {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["draft", "pending", "paid", "void"]}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"invoices": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "amount_cents": {"type": "integer"}, "status": {"type": "string", "enum": ["draft", "pending", "paid", "void"]}, "customer_email": {"type": "string"}}, "required": ["id", "amount_cents", "status"]}}}, "required": ["invoices"]}}}}, "post": {"operationId": "createInvoice", "parameters": [], "requestSchema": {"type": "object", "properties": {"customer_email": {"type": "string"}, "amount_cents": {"type": "integer"}}, "required": ["customer_email", "amount_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "amount_cents": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "amount_cents", "status"]}}}}}, "/v1/charges": {"post": {"operationId": "createCharge", "parameters": [], "requestSchema": {"type": "object", "properties": {"card_token": {"type": "string"}, "amount_cents": {"type": "integer"}}, "required": ["card_token", "amount_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "status": {"type": "string"}}, "required": ["id", "status"]}}}}}}}, "newSpec": {"openapi": "3.0.0", "info": {"title": "Northwind Billing API", "version": "2.0.0"}, "paths": {"/v2/invoices": {"get": {"operationId": "listInvoices", "parameters": [{"name": "page_size", "in": "query", "required": false, "schema": {"type": "integer"}}, {"name": "status", "in": "query", "required": false, "schema": {"type": "string", "enum": ["draft", "open", "paid", "void"]}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"invoices": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "total_cents": {"type": "integer"}, "status": {"type": "string", "enum": ["draft", "open", "paid", "void"]}, "customer_email": {"type": "string"}}, "required": ["id", "total_cents", "status"]}}}, "required": ["invoices"]}}}}, "post": {"operationId": "createInvoice", "parameters": [], "requestSchema": {"type": "object", "properties": {"customer_email": {"type": "string"}, "total_cents": {"type": "integer"}}, "required": ["customer_email", "total_cents"]}, "responses": {"201": {"description": "Created", "schema": {"type": "object", "properties": {"id": {"type": "string"}, "total_cents": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "total_cents", "status"]}}}}}, "/v2/customers/{id}/balance": {"get": {"operationId": "getCustomerBalance", "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "OK", "schema": {"type": "object", "properties": {"balance_cents": {"type": "integer"}}, "required": ["balance_cents"]}}}}}}}, "consumer": [{"name": "charges.js", "content": "import { api } from './client.js';\n\n// Charge a card token directly\nexport async function chargeCard(cardToken, amountCents) {\n  const res = await api.post('/v1/charges', { card_token: cardToken, amount_cents: amountCents });\n  return res.status === 'succeeded';\n}\n"}, {"name": "client.js", "content": "// Thin wrapper around fetch for the Northwind Billing API\nexport const api = {\n  base: 'https://api.northwind.example',\n  async get(path, opts = {}) {\n    const q = opts.params ? '?' + new URLSearchParams(opts.params) : '';\n    const r = await fetch(this.base + path + q, { headers: this.headers() });\n    return r.json();\n  },\n  async post(path, body) {\n    const r = await fetch(this.base + path, { method: 'POST', headers: this.headers(), body: JSON.stringify(body) });\n    return r.json();\n  },\n  headers() { return { 'Authorization': 'Bearer ' + process.env.NORTHWIND_KEY, 'Content-Type': 'application/json' }; },\n};\n"}, {"name": "dashboard.js", "content": "import { listPendingInvoices } from './invoices.js';\n\nexport async function renderDashboard() {\n  const rows = await listPendingInvoices();\n  for (const row of rows) {\n    console.log(`Invoice ${row.id}: $${row.total} (${row.state})`);\n  }\n}\n"}, {"name": "invoices.js", "content": "import { api } from './client.js';\n\n// List recent pending invoices for the dashboard\nexport async function listPendingInvoices() {\n  const res = await api.get('/v1/invoices', { params: { limit: 20, status: 'pending' } });\n  return res.invoices.map((inv) => ({\n    id: inv.id,\n    total: inv.amount_cents / 100,\n    state: inv.status,\n  }));\n}\n\nexport async function createInvoice(email, amountCents) {\n  const res = await api.post('/v1/invoices', { customer_email: email, amount_cents: amountCents });\n  return res.id;\n}\n"}]}</script>
+<script>
+"use strict";
+// Patchline deterministic engines: spec diff, consumer impact scan, fix + PR generation.
+// No network, no AI inference. All logic is rule-based and testable.
+
+const VERSION_PREFIX = /^\/v\d+/;
+
+function normalizePath(p) {
+  return p.replace(VERSION_PREFIX, '');
+}
+
+function flattenSpec(spec) {
+  const out = new Map();
+  const paths = spec.paths || {};
+  for (const [p, methods] of Object.entries(paths)) {
+    for (const [m, op] of Object.entries(methods)) {
+      const resp = op.responses || {};
+      const first = resp['200'] || resp['201'] || Object.values(resp)[0] || {};
+      const fields = {};
+      const props = first.schema?.properties || {};
+      // one level of array items / object properties is enough for the demo scope
+      const collect = (properties, prefix, requiredList) => {
+        for (const [name, def] of Object.entries(properties || {})) {
+          fields[prefix + name] = {
+            type: def.type || 'object',
+            required: (requiredList || []).includes(name),
+            enum: def.enum || null,
+          };
+          if (def.type === 'array' && def.items?.properties) {
+            collect(def.items.properties, prefix + name + '[].', def.items.required);
+          }
+        }
+      };
+      collect(props, '', first.schema?.required);
+      const reqProps = op.requestSchema?.properties || {};
+      const requestFields = {};
+      for (const [name, def] of Object.entries(reqProps)) {
+        requestFields[name] = { type: def.type || 'object', required: (op.requestSchema?.required || []).includes(name) };
+      }
+      out.set(`${m.toUpperCase()} ${p}`, {
+        method: m.toUpperCase(),
+        path: p,
+        normalized: normalizePath(p),
+        operationId: op.operationId || null,
+        params: (op.parameters || []).map((x) => ({ name: x.name, location: x.in, required: !!x.required, type: x.schema?.type || 'string', enum: x.schema?.enum || null })),
+        responseFields: fields,
+        requestFields,
+      });
+    }
+  }
+  return out;
+}
+
+function renameCandidate(oldFields, newFields) {
+  // a field present in old but absent in new, where a new field of same type appeared -> rename guess
+  const removed = Object.keys(oldFields).filter((k) => !(k in newFields));
+  const added = Object.keys(newFields).filter((k) => !(k in oldFields));
+  const pairs = [];
+  const usedAdded = new Set();
+  for (const r of removed) {
+    const match = added.find((a) => !usedAdded.has(a) && newFields[a].type === oldFields[r].type);
+    if (match) { pairs.push([r, match]); usedAdded.add(match); }
+  }
+  return { pairs, removedOnly: removed.filter((r) => !pairs.some(([a]) => a === r)), addedOnly: added.filter((a) => !usedAdded.has(a)) };
+}
+
+function diffSpecs(oldSpec, newSpec) {
+  const oldMap = flattenSpec(oldSpec);
+  const newMap = flattenSpec(newSpec);
+  const changes = [];
+  const matched = new Set();
+
+  // match endpoints across version prefixes
+  const newByNormalized = new Map();
+  for (const [key, ep] of newMap) {
+    const nk = `${ep.method} ${ep.normalized}`;
+    if (!newByNormalized.has(nk)) newByNormalized.set(nk, []);
+    newByNormalized.get(nk).push([key, ep]);
+  }
+
+  for (const [key, ep] of oldMap) {
+    const nk = `${ep.method} ${ep.normalized}`;
+    const candidates = (newByNormalized.get(nk) || []).filter(([k]) => !matched.has(k));
+    if (candidates.length === 0) {
+      changes.push({ kind: 'breaking', type: 'endpoint_removed', endpoint: key, detail: `${key} no longer exists in v${newSpec.info.version}.`, migration: 'Manual review: no direct replacement. Check whether another endpoint covers this workflow.' });
+      continue;
+    }
+    const [newKey, nep] = candidates[0];
+    matched.add(newKey);
+    if (ep.path !== nep.path) {
+      changes.push({ kind: 'breaking', type: 'base_path_changed', endpoint: key, detail: `Base path moved ${ep.path} -> ${nep.path}.`, migration: `Replace URL prefix ${ep.path.match(VERSION_PREFIX)?.[0] || ''} with ${nep.path.match(VERSION_PREFIX)?.[0] || ''}.`, from: ep.path, to: nep.path });
+    }
+    // params
+    const oldP = Object.fromEntries(ep.params.map((x) => [x.name, x]));
+    const newP = Object.fromEntries(nep.params.map((x) => [x.name, x]));
+    const pr = renameCandidate(
+      Object.fromEntries(ep.params.map((x) => [x.name, { type: x.type }])),
+      Object.fromEntries(nep.params.map((x) => [x.name, { type: x.type }]))
+    );
+    for (const [a, b] of pr.pairs) {
+      changes.push({ kind: 'breaking', type: 'param_renamed', endpoint: key, detail: `Query parameter "${a}" is now "${b}" on ${newKey}.`, migration: `Rename "${a}" to "${b}" at call sites.`, from: a, to: b });
+    }
+    for (const r of pr.removedOnly) {
+      changes.push({ kind: 'breaking', type: 'param_removed', endpoint: key, detail: `Parameter "${r}" was removed from ${key}.`, migration: 'Remove the parameter or map it to new behavior manually.', from: r, to: null });
+    }
+    // enum values on params retained by name
+    for (const [name, op_] of Object.entries(oldP)) {
+      const np_ = newP[name];
+      if (np_ && op_.enum && np_.enum) {
+        const lost = op_.enum.filter((v) => !np_.enum.includes(v));
+        const gained = np_.enum.filter((v) => !op_.enum.includes(v));
+        for (const v of lost) {
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `"${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Replace "${v}" with "${gained[0]}".` : 'Choose a supported value manually.', from: v, to: gained[0] || null, param: name });
+        }
+      }
+    }
+    // response fields
+    const fr = renameCandidate(ep.responseFields, nep.responseFields);
+    for (const [a, b] of fr.pairs) {
+      changes.push({ kind: 'breaking', type: 'response_field_renamed', endpoint: key, detail: `Response field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename reads of "${a}" to "${b}".`, from: a, to: b });
+    }
+    for (const r of fr.removedOnly) {
+      changes.push({ kind: 'breaking', type: 'response_field_removed', endpoint: key, detail: `Response field "${r}" was removed from ${key}.`, migration: 'Stop reading this field or source it elsewhere.', from: r, to: null });
+    }
+    for (const a of fr.addedOnly) {
+      changes.push({ kind: 'additive', type: 'response_field_added', endpoint: newKey, detail: `New response field "${a}" on ${newKey}.`, migration: 'Optional: adopt when useful.', from: null, to: a });
+    }
+    // request fields
+    const qr = renameCandidate(ep.requestFields, nep.requestFields);
+    for (const [a, b] of qr.pairs) {
+      changes.push({ kind: 'breaking', type: 'request_field_renamed', endpoint: key, detail: `Request field "${a}" is now "${b}" on ${newKey}.`, migration: `Rename writes of "${a}" to "${b}".`, from: a, to: b });
+    }
+    // response enum changes
+    for (const [name, of] of Object.entries(ep.responseFields)) {
+      const nf = nep.responseFields[name];
+      if (nf && of.enum && nf.enum) {
+        const lost = of.enum.filter((v) => !nf.enum.includes(v));
+        const gained = nf.enum.filter((v) => !of.enum.includes(v));
+        for (const v of lost) {
+          changes.push({ kind: 'breaking', type: 'enum_value_removed', endpoint: key, detail: `Response field "${name}" value "${v}" was removed${gained.length ? ` (new value "${gained[0]}" appears to replace it)` : ''}.`, migration: gained.length ? `Map "${v}" to "${gained[0]}".` : 'Map manually to a supported value.', from: v, to: gained[0] || null, field: name });
+        }
+      }
+    }
+  }
+  // endpoints only in new spec
+  for (const [key, ep] of newMap) {
+    if (!matched.has(key)) {
+      const wasMatchedAsPair = [...oldMap.values()].some((o) => `${o.method} ${o.normalized}` === `${ep.method} ${ep.normalized}`);
+      if (!wasMatchedAsPair) {
+        changes.push({ kind: 'additive', type: 'endpoint_added', endpoint: key, detail: `New endpoint ${key} is available.`, migration: 'Optional: adopt when useful.', from: null, to: key });
+      }
+    }
+  }
+  return changes;
+}
+
+// ---- consumer impact scan ----
+
+function scanConsumer(files, changes) {
+  // files: [{name, content}]. Find lines affected by each breaking change.
+  const usages = [];
+  const breaking = changes.filter((c) => c.kind === 'breaking');
+  for (const f of files) {
+    const lines = f.content.split('\n');
+    lines.forEach((text, i) => {
+      for (const c of breaking) {
+        let hit = false;
+        if (c.type === 'endpoint_removed' || c.type === 'base_path_changed') {
+          const p = (c.endpoint.split(' ')[1] || '').replace(/\{[^}]+\}/g, '');
+          if (p && text.includes(p)) hit = true;
+        }
+        if (c.type === 'param_renamed' || c.type === 'param_removed') {
+          if (new RegExp(`['"\\s{]${c.from}['"\\s:]`).test(text)) hit = true;
+        }
+        if (c.type === 'response_field_renamed' || c.type === 'response_field_removed' || c.type === 'request_field_renamed') {
+          if (new RegExp(`[.\\s{'"]${c.from}[\\s,}'":]`).test(text)) hit = true;
+        }
+        if (c.type === 'enum_value_removed') {
+          if (new RegExp(`['"\`]${c.from}['"\`]`).test(text)) hit = true;
+        }
+        if (hit) usages.push({ file: f.name, line: i + 1, text: text.trimEnd(), change: c });
+      }
+    });
+  }
+  return usages;
+}
+
+// ---- fix generation ----
+
+function buildFixes(files, changes) {
+  const breaking = changes.filter((c) => c.kind === 'breaking');
+  const removedPaths = breaking.filter((c) => c.type === 'endpoint_removed').map((c) => c.endpoint.split(' ')[1]);
+  const fixes = [];
+  for (const f of files) {
+    const lines = f.content.split('\n');
+    const edits = [];
+    lines.forEach((text, i) => {
+      // Never auto-edit a line that calls a removed endpoint; manual review owns it.
+      if (removedPaths.some((p) => p && text.includes(p))) return;
+      let after = text;
+      const applied = [];
+      for (const c of breaking) {
+        if (c.type === 'base_path_changed' && c.from && c.to) {
+          // only rewrite full matched endpoint paths, never a bare version prefix:
+          // a removed sibling endpoint (e.g. /v1/charges) must stay untouched + flagged.
+          if (after.includes(c.from)) {
+            after = after.split(c.from).join(c.to);
+            applied.push(`path ${c.from} -> ${c.to}`);
+          }
+        } else if ((c.type === 'param_renamed' || c.type === 'response_field_renamed' || c.type === 'request_field_renamed') && c.from && c.to) {
+          const re = new RegExp(`\\b${c.from}\\b`, 'g');
+          if (re.test(after)) { after = after.replace(re, c.to); applied.push(`rename ${c.from} -> ${c.to}`); }
+        } else if (c.type === 'enum_value_removed' && c.from && c.to) {
+          const re = new RegExp(`(['"\`])${c.from}\\1`, 'g');
+          if (re.test(after)) { after = after.replace(re, `$1${c.to}$1`); applied.push(`enum ${c.from} -> ${c.to}`); }
+        }
+      }
+      if (applied.length) edits.push({ line: i + 1, before: text, after, applied });
+    });
+    // manual-review flags: endpoint_removed references
+    const manual = [];
+    lines.forEach((text, i) => {
+      for (const c of breaking) {
+        if (c.type === 'endpoint_removed') {
+          const p = (c.endpoint.split(' ')[1] || '');
+          if (p && text.includes(p)) manual.push({ line: i + 1, text: text.trim(), reason: c.detail });
+        }
+      }
+    });
+    if (edits.length || manual.length) fixes.push({ file: f.name, edits, manual });
+  }
+  return fixes;
+}
+
+function buildPR({ oldVersion, newVersion, apiTitle, changes, fixes }) {
+  const breaking = changes.filter((c) => c.kind === 'breaking');
+  const additive = changes.filter((c) => c.kind === 'additive');
+  const editCount = fixes.reduce((n, f) => n + f.edits.length, 0);
+  const manualCount = fixes.reduce((n, f) => n + f.manual.length, 0);
+  const L = [];
+  L.push(`## Migrate ${apiTitle} ${oldVersion} -> ${newVersion}`);
+  L.push('');
+  L.push(`Generated by Patchline (deterministic rules, no AI inference). ${breaking.length} breaking and ${additive.length} additive changes detected; ${editCount} call-site edit(s) proposed, ${manualCount} spot(s) flagged for manual review.`);
+  L.push('');
+  L.push('### Breaking changes');
+  for (const c of breaking) L.push(`- **${c.type}** (${c.endpoint}): ${c.detail} _Fix:_ ${c.migration}`);
+  if (additive.length) {
+    L.push('');
+    L.push('### Additive (no action required)');
+    for (const c of additive) L.push(`- **${c.type}** (${c.endpoint}): ${c.detail}`);
+  }
+  L.push('');
+  L.push('### Proposed edits');
+  for (const f of fixes) {
+    L.push(`#### ${f.file}`);
+    L.push('```diff');
+    for (const e of f.edits) {
+      L.push(`@@ line ${e.line} (${e.applied.join('; ')})`);
+      L.push(`- ${e.before.trim()}`);
+      L.push(`+ ${e.after.trim()}`);
+    }
+    L.push('```');
+    for (const mn of f.manual) L.push(`- :warning: Manual review at line ${mn.line}: \`${mn.text}\` - ${mn.reason}`);
+  }
+  L.push('');
+  L.push('### Verification checklist');
+  L.push('- [ ] CI passes with the new API version');
+  L.push('- [ ] Contract tests cover renamed fields and enum mappings');
+  L.push('- [ ] Manual-review spots resolved or ticketed');
+  return L.join('\n');
+}
+
+function summarize(changes) {
+  const breaking = changes.filter((c) => c.kind === 'breaking').length;
+  const additive = changes.filter((c) => c.kind === 'additive').length;
+  return { breaking, additive, total: changes.length };
+}
+
+// ---------- app wiring ----------
+const FIX = JSON.parse(document.getElementById('fixtures').textContent);
+const $ = (id) => document.getElementById(id);
+let state = { changes: null, files: FIX.consumer, fixes: null, oldSpec: null, newSpec: null };
+
+function loadSample() {
+  $('specError').textContent = '';
+  $('oldSpec').value = JSON.stringify(FIX.oldSpec, null, 2);
+  $('newSpec').value = JSON.stringify(FIX.newSpec, null, 2);
+  $('oldVerLabel').textContent = FIX.oldSpec.info.title + ' v' + FIX.oldSpec.info.version;
+  $('newVerLabel').textContent = FIX.newSpec.info.title + ' v' + FIX.newSpec.info.version;
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 1800);
+}
+function go(step) {
+  document.querySelectorAll('nav.steps button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.step === String(step));
+    if (Number(b.dataset.step) <= step) b.disabled = false;
+  });
+  document.querySelectorAll('section').forEach((s) => s.classList.toggle('on', s.id === 's' + step));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+document.querySelectorAll('nav.steps button').forEach((b) => b.addEventListener('click', () => { if (!b.disabled) go(b.dataset.step); }));
+$('resetSpecs').addEventListener('click', loadSample);
+
+$('runDiff').addEventListener('click', () => {
+  $('specError').textContent = '';
+  try {
+    state.oldSpec = JSON.parse($('oldSpec').value);
+    state.newSpec = JSON.parse($('newSpec').value);
+  } catch (e) { $('specError').textContent = 'Invalid JSON: ' + e.message; return; }
+  state.changes = diffSpecs(state.oldSpec, state.newSpec);
+  renderDiff();
+  go(2);
+});
+
+function renderDiff() {
+  const s = summarize(state.changes);
+  $('statRow').innerHTML =
+    `<div class="stat"><div class="v">${s.total}</div><div class="k">changes detected</div></div>` +
+    `<div class="stat break"><div class="v">${s.breaking}</div><div class="k">breaking</div></div>` +
+    `<div class="stat add"><div class="v">${s.additive}</div><div class="k">additive</div></div>` +
+    `<div class="stat warn"><div class="v">${state.files.length}</div><div class="k">consumer files to scan</div></div>`;
+  const tb = document.querySelector('#changeTable tbody');
+  tb.innerHTML = '';
+  for (const c of state.changes) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><span class="pill ${c.kind === 'breaking' ? 'break' : 'add'}">${c.kind}</span></td>` +
+      `<td><span class="inline-code">${c.type}</span></td>` +
+      `<td>${c.detail}<div class="mig">&rarr; ${c.migration}</div></td>`;
+    tb.appendChild(tr);
+  }
+}
+
+$('toImpact').addEventListener('click', () => {
+  state.fixes = buildFixes(state.files, state.changes);
+  renderImpact();
+  go(3);
+});
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+function renderImpact() {
+  const box = $('impactList'); box.innerHTML = '';
+  const usages = scanConsumer(state.files, state.changes);
+  const byFile = new Set(usages.map((u) => u.file));
+  if (!state.fixes.length) { box.innerHTML = '<p style="color:var(--dim)">No call sites affected. This consumer is already compatible.</p>'; return; }
+  for (const f of state.fixes) {
+    const div = document.createElement('div');
+    div.className = 'file-block';
+    let inner = `<div class="file-head"><span>${f.file}</span><span class="counts">${f.edits.length} edit(s) &middot; ${f.manual.length} manual</span></div>`;
+    if (f.edits.length) {
+      inner += '<pre class="diff">';
+      for (const e of f.edits) {
+        inner += `<span class="meta">@@ line ${e.line} - ${esc(e.applied.join('; '))}</span>`;
+        inner += `<span class="del">- ${esc(e.before.trim())}</span>`;
+        inner += `<span class="addline">+ ${esc(e.after.trim())}</span>`;
+      }
+      inner += '</pre>';
+    }
+    for (const mn of f.manual) {
+      inner += `<div class="manual-item">&#9888; Manual review, line ${mn.line}: <code>${esc(mn.text)}</code><br><span style="color:var(--dim);font-size:12.5px">${esc(mn.reason)}</span></div>`;
+    }
+    div.innerHTML = inner;
+    box.appendChild(div);
+  }
+  const untouched = state.files.filter((f) => !byFile.has(f.name));
+  if (untouched.length) {
+    const p = document.createElement('p');
+    p.style.cssText = 'color:var(--faint);font-size:13px;margin-top:6px';
+    p.textContent = 'Untouched by breaking changes: ' + untouched.map((f) => f.name).join(', ');
+    box.appendChild(p);
+  }
+}
+
+$('toPR').addEventListener('click', () => {
+  const pr = buildPR({
+    oldVersion: state.oldSpec.info.version, newVersion: state.newSpec.info.version,
+    apiTitle: state.oldSpec.info.title, changes: state.changes, fixes: state.fixes,
+  });
+  $('prOut').textContent = pr;
+  go(4);
+});
+
+$('copyPR').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('prOut').textContent); toast('PR markdown copied'); }
+  catch { toast('Copy blocked by browser - select the text manually'); }
+});
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('dlPR').addEventListener('click', () => download('patchline-migration-pr.md', $('prOut').textContent, 'text/markdown'));
+$('dlJSON').addEventListener('click', () => download('patchline-analysis.json', JSON.stringify({ changes: state.changes, fixes: state.fixes }, null, 2), 'application/json'));
+
+loadSample();
+</script>
+</body>
+</html>

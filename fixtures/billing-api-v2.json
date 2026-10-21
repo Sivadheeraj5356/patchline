@@ -1,0 +1,156 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Northwind Billing API",
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/v2/invoices": {
+      "get": {
+        "operationId": "listInvoices",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "open",
+                "paid",
+                "void"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "invoices": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "total_cents": {
+                        "type": "integer"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "draft",
+                          "open",
+                          "paid",
+                          "void"
+                        ]
+                      },
+                      "customer_email": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "total_cents",
+                      "status"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "invoices"
+              ]
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInvoice",
+        "parameters": [],
+        "requestSchema": {
+          "type": "object",
+          "properties": {
+            "customer_email": {
+              "type": "string"
+            },
+            "total_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "customer_email",
+            "total_cents"
+          ]
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "total_cents": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "total_cents",
+                "status"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "/v2/customers/{id}/balance": {
+      "get": {
+        "operationId": "getCustomerBalance",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "balance_cents": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "balance_cents"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

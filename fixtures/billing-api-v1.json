@@ -1,0 +1,166 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Northwind Billing API",
+    "version": "1.8.1"
+  },
+  "paths": {
+    "/v1/invoices": {
+      "get": {
+        "operationId": "listInvoices",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "pending",
+                "paid",
+                "void"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "invoices": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "amount_cents": {
+                        "type": "integer"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "draft",
+                          "pending",
+                          "paid",
+                          "void"
+                        ]
+                      },
+                      "customer_email": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "amount_cents",
+                      "status"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "invoices"
+              ]
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createInvoice",
+        "parameters": [],
+        "requestSchema": {
+          "type": "object",
+          "properties": {
+            "customer_email": {
+              "type": "string"
+            },
+            "amount_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "customer_email",
+            "amount_cents"
+          ]
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "amount_cents": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "amount_cents",
+                "status"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "/v1/charges": {
+      "post": {
+        "operationId": "createCharge",
+        "parameters": [],
+        "requestSchema": {
+          "type": "object",
+          "properties": {
+            "card_token": {
+              "type": "string"
+            },
+            "amount_cents": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "card_token",
+            "amount_cents"
+          ]
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
