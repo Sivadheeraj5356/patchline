@@ -108,7 +108,7 @@ export default {
       const hashBuf = await crypto.subtle.digest('SHA-256', enc.encode([body.oldUrl, body.newUrl, body.repoUrl || ''].join('\n')));
       const hash = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, '0')).join('');
       const existing = await env.JOBS.get('dedupe:' + hash, 'json');
-      if (existing) return json(200, { job_id: existing.job_id, status: existing.status, deduped: true });
+      if (existing) return json(200, { job_id: existing.job_id, status: existing.status, deduped: true, originalRunAt: existing.at || null, note: 'Identical inputs were already submitted within the last hour; this is the original run. Mutable URLs (branch heads) are re-fetched on a fresh submission after the 1h dedupe window.' });
 
       const job = { job_id: crypto.randomUUID(), type: 'analyze', oldUrl: body.oldUrl, newUrl: body.newUrl };
       if (body.repoUrl) job.repoUrl = body.repoUrl;

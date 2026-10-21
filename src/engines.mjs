@@ -201,10 +201,10 @@ export function diffSpecs(oldSpec, newSpec) {
       const np_ = newP[name];
       if (!np_) continue;
       if (!op_.required && np_.required) {
-        changes.push({ kind: 'breaking', type: 'param_required_changed', endpoint: key, detail: `Parameter "${name}" on ${newKey} is now required.`, migration: `Pass "${name}" at every call site of this endpoint.`, from: name, to: null });
+        changes.push({ kind: 'breaking', type: 'param_required_changed', endpoint: key, detail: `Parameter "${name}" on ${newKey} is now required.`, migration: `Pass "${name}" at every call site of this endpoint.`, from: name, to: null, review: true });
       }
       if (op_.type && np_.type && op_.type !== np_.type) {
-        changes.push({ kind: 'breaking', type: 'param_type_changed', endpoint: key, detail: `Parameter "${name}" type changed ${op_.type} -> ${np_.type} on ${newKey}.`, migration: 'Manual review: update values sent for this parameter to the new type.', from: op_.type, to: np_.type, param: name });
+        changes.push({ kind: 'breaking', type: 'param_type_changed', endpoint: key, detail: `Parameter "${name}" type changed ${op_.type} -> ${np_.type} on ${newKey}.`, migration: 'Manual review: update values sent for this parameter to the new type.', from: op_.type, to: np_.type, param: name, review: true });
       }
     }
     // enum values on params retained by name
@@ -405,6 +405,10 @@ export function buildFixes(files, changes, opts = {}) {
         if (c.type === 'endpoint_removed') {
           const p = (c.endpoint.split(' ')[1] || '');
           if (p && text.includes(p)) manual.push({ line: i + 1, text: text.trim(), reason: c.detail });
+        }
+        if (c.type === 'param_required_changed' || c.type === 'param_type_changed') {
+          const pname = c.from || c.param;
+          if (pname && new RegExp(`['"\\s{]${pname}['"\\s:]`).test(text)) manual.push({ line: i + 1, text: text.trim(), reason: c.detail + (c.migration ? ' ' + c.migration : '') });
         }
       }
     });

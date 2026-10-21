@@ -74,8 +74,11 @@ try {
     const files = await fetchRepoArchive(repoUrl, { token: process.env.GH_SCAN_TOKEN || null });
     const usages = scanConsumer(files, changes);
     const fixes = buildFixes(files, changes);
+    // heuristic param matches are review flags, not confirmed call sites
+    const JUDGMENT = new Set(['param_required_changed', 'param_type_changed']);
+    const confirmedUsages = usages.filter((u) => !JUDGMENT.has(u.change.type));
     result.result.impact = {
-      repoUrl, scannedFiles: files.length, affectedLines: usages.length,
+      repoUrl, scannedFiles: files.length, affectedLines: confirmedUsages.length,
       proposedEdits: fixes.reduce((n, f) => n + f.edits.length, 0),
       inferredSuggestions: fixes.reduce((n, f) => n + (f.suggested || []).length, 0),
       manualSpots: fixes.reduce((n, f) => n + f.manual.length, 0),

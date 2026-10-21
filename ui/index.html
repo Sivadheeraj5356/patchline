@@ -90,6 +90,8 @@
   .toast.show { opacity: 1; }
   body[data-mode=worker] .urlrow { display: none; }
   body[data-mode=worker] #addWatchRow { display: none; }
+  body[data-mode=worker] #watchHintAuto { display: none; }
+  body[data-mode=worker] #watchHintManual { display: block; }
 </style>
 <script>
 // Shared-key gate client: when the server has PATCHLINE_AUTH_KEY set, every
@@ -251,7 +253,8 @@
   <section id="s5">
     <div class="card">
       <h2>Watch a live API spec</h2>
-      <p class="hint">Patchline polls the spec URL on the interval you set (minimum <span id="minInt">60</span> minutes, with conditional requests so unchanged specs cost one cheap 304), saves a baseline, and records a diff event whenever the served spec actually changes.</p>
+      <p class="hint" id="watchHintAuto">Patchline polls the spec URL on the interval you set (minimum <span id="minInt">60</span> minutes, with conditional requests so unchanged specs cost one cheap 304), saves a baseline, and records a diff event whenever the served spec actually changes.</p>
+      <p class="hint" id="watchHintManual" style="display:none">On this hosted deployment there is no automated watching - each check is a manual hosted analysis (step 01). Automated polling runs with the local server or the self-hosted GitHub Actions schedule.</p>
       <div class="row" id="addWatchRow" style="margin-top:0;margin-bottom:14px">
         <input type="text" id="wName" placeholder="Name (e.g. Acme Payments)" style="max-width:240px">
         <input type="text" id="wUrl" placeholder="https://.../openapi.yaml" style="max-width:340px">
@@ -269,7 +272,7 @@
   </section>
 
   <footer>
-    Patchline &middot; fictional sample API and consumer app &middot; all analysis is deterministic rules over the specs you provide - no AI inference &middot; in hosted mode, specs you load by URL and watches you add are processed by this server &middot; detection tools like oasdiff already exist - the wedge here is the <i>application</i> layer: scanning consumer code and drafting the fix.<br>
+    Patchline &middot; fictional sample API and consumer app &middot; all analysis is deterministic rules over the specs you provide - no AI inference &middot; in hosted mode, specs you load by URL are processed by this server (no automated watching) &middot; detection tools like oasdiff already exist - the wedge here is the <i>application</i> layer: scanning consumer code and drafting the fix.<br>
     Built for the YC Fall 2026 RFS idea "Self-Maintaining APIs". A YC request signals partner interest, not validated demand.
   </footer>
 </div>
@@ -1005,6 +1008,7 @@ if (runJobBtn) runJobBtn.addEventListener('click', async () => {
     const res = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(repoUrl ? { oldUrl, newUrl, repoUrl } : { oldUrl, newUrl }) });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error || ('dispatch failed (' + res.status + ')'));
+    if (body.deduped) st.textContent = 'Identical inputs were already analyzed' + (body.originalRunAt ? ' at ' + new Date(body.originalRunAt).toLocaleString() : '') + ' - showing that result. Resubmit after the 1h dedupe window for a fresh run (mutable branch URLs are re-fetched then).';
     pollJob(body.job_id);
   } catch (e) { st.textContent = e.message; st.style.color = 'var(--break)'; }
 });
