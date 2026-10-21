@@ -5,6 +5,7 @@ import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
+import { buildTarGz } from './tar-fixture.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let passed = 0, failed = 0;
@@ -161,26 +162,35 @@ await t('watch with repoUrl attaches consumer impact to change events', async ()
   await fetch(B + '/api/watches?id=' + created2.watch.id, { method: 'DELETE' });
 });
 
-await t('remote repoUrl clone disabled by default, allowed with explicit flag', async () => {
-  // default server (already running): http repoUrl refused with disabled message
-  const refused = await post('/api/watches', { name: 'gated-repo', url: fixtureUrl, repoUrl: 'http://127.0.0.1:9/repo.git', intervalMinutes: 1 });
-  ok(refused.error && /disabled/.test(refused.error), 'repoUrl refused while remote clone disabled: ' + JSON.stringify(refused));
-  // opt-in server: flag + test mode -> watch created with repoUrl stored
-  const child3 = spawn('node', [join(root, 'src/server.mjs')], {
-    env: { ...process.env, PORT: '18501', PATCHLINE_DATA: dataDir, PATCHLINE_MIN_INTERVAL_MIN: '1', PATCHLINE_ALLOW_PRIVATE: '1', PATCHLINE_ALLOW_REMOTE_CLONE: '1' },
-    stdio: 'pipe',
+await t('watch -> repo impact via pinned archive fetch (git-free server path)', async () => {
+  // consumer repo served as a tar.gz from a local fixture (github/codeload shape)
+  const consumerGz = buildTarGz([
+    { name: 'consumer-abc/src/invoices.js', content: "const t = inv.amount_cents / 100;\nawait api.get('/v2/payouts');\n" },
+    { name: 'consumer-abc/node_modules/dep/index.js', content: 'skip();\n' },
+  ]);
+  const repoSrv = createServer((req, res) => {
+    if (req.url === '/repo.tar.gz') { res.writeHead(200, { 'content-type': 'application/gzip' }); res.end(consumerGz); }
+    else { res.writeHead(404); res.end(); }
   });
-  await new Promise((resolve, reject) => {
-    child3.stdout.on('data', (d) => { if (String(d).includes('patchline server on')) resolve(); });
-    setTimeout(() => reject(new Error('server3 start timeout')), 8000);
-  });
+  await new Promise((r) => repoSrv.listen(0, '127.0.0.1', r));
+  const repoUrl = `http://127.0.0.1:${repoSrv.address().port}/repo.tar.gz`;
   try {
-    const r3 = await fetch('http://127.0.0.1:18501/api/watches', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'gated-repo-ok', url: fixtureUrl, repoUrl: 'http://127.0.0.1:9/repo.git', intervalMinutes: 1 }) });
-    const j3 = await r3.json();
-    ok(j3.watch && j3.watch.repoUrl === 'http://127.0.0.1:9/repo.git', 'repoUrl accepted with explicit flag: ' + JSON.stringify(j3).slice(0, 200));
-    await fetch('http://127.0.0.1:18501/api/watches?id=' + j3.watch.id, { method: 'DELETE' });
+    // repoUrl validation: non-http still refused; archive URL accepted by default (no flag)
+    const bad = await post('/api/watches', { name: 'bad-repo', url: fixtureUrl, repoUrl: 'file:///tmp/x', intervalMinutes: 1 });
+    ok(bad.error, 'file:// repoUrl refused');
+    current = specV1;
+    const created = await post('/api/watches', { name: 'arch-repo', url: fixtureUrl, repoUrl, intervalMinutes: 1 });
+    ok(created.watch && created.watch.repoUrl === repoUrl, 'repoUrl accepted (archive path, no clone flag): ' + JSON.stringify(created).slice(0, 200));
+    current = specV2;
+    const changed = await post('/api/watches/check', { id: created.watch.id });
+    ok(changed.status === 'changed', 'change detected');
+    ok(changed.event.impact && changed.event.impact.repoUrl === repoUrl, 'impact block attached');
+    ok(changed.event.impact.scannedFiles === 1, 'node_modules filtered, 1 code file scanned: ' + JSON.stringify(changed.event.impact).slice(0, 200));
+    ok(changed.event.impact.affectedLines >= 1, 'affected lines reported');
+    ok(changed.event.impact.manualSpots >= 1, 'manual-review spot for removed /v2/payouts usage');
+    await fetch(B + '/api/watches?id=' + created.watch.id, { method: 'DELETE' });
   } finally {
-    child3.kill();
+    repoSrv.close();
   }
 });
 

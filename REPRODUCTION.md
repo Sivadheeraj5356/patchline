@@ -39,13 +39,17 @@ Not proven / known limits:
   without a consistent cross-side mapping) stay removed+added.
 - Files that call no known endpoint are still scanned (uncertainty beats a
   false clean); files calling a different known endpoint are excluded.
-- Repo clone's DNS pre-check has a short TOCTOU window: git resolves DNS
-  itself. Because of this, server-side remote cloning is DISABLED by default
-  (PATCHLINE_ALLOW_REMOTE_CLONE=1 opts in, intended for local/operator
-  deployments only) until a pinned archive-fetch + bounded extractor replaces
-  git clone on server paths. When cloning is enabled: redirects (initial
-  only), submodules, file/ext protocols and credential prompts are disabled
-  via git flags and a scrubbed env.
+- Consumer repos on SERVER paths are read via pinned archive fetch + bounded
+  in-memory extraction (src/archive.mjs): github.com URLs map to codeload
+  tarballs, other hosts must serve a tar.gz directly. DNS is resolved once
+  and pinned per redirect hop (no second resolution window - the git-clone
+  TOCTOU is gone from the server). The extractor never writes to disk,
+  never follows links, never executes code; caps: 20MB compressed, 64MB
+  decompressed total, 512KB/file, 2000 files; traversal/absolute paths
+  rejected, symlinks/devices skipped. Watch-to-repo impact linking is
+  covered end-to-end by a server test.
+- git clone remains in the operator-run CLI only (local, user-supplied URLs;
+  bounded by redirect/submodule/protocol/env flags).
 - Consumer scanning is TEXT-BASED leaf matching, not AST analysis. A query
   parameter and a body field sharing a name cannot be told apart in source
   text, so such renames are never inferred: they are reported as
