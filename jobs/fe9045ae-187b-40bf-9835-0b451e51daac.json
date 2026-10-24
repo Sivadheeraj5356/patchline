@@ -1,0 +1,9 @@
+{
+  "job_id": "fe9045ae-187b-40bf-9835-0b451e51daac",
+  "type": "analyze",
+  "status": "error",
+  "finishedAt": "2026-10-24T11:41:02.458Z",
+  "result": null,
+  "error": "HTTP 404 from https://raw.githubusercontent.com/OAI/OpenAPI-Specification/main/examples/v3.0/petstore.yaml",
+  "truncated": false
+}
