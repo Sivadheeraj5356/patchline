@@ -1,0 +1,97 @@
+{
+  "job_id": "56f1a628-c151-4cd2-8aad-28f0e53a7336",
+  "type": "analyze",
+  "status": "done",
+  "finishedAt": "2026-10-24T11:41:47.924Z",
+  "result": {
+    "summary": {
+      "breaking": 3,
+      "additive": 5,
+      "warnings": 0,
+      "review": 3,
+      "total": 8
+    },
+    "changes": [
+      {
+        "review": true,
+        "kind": "breaking",
+        "type": "response_code_removed",
+        "endpoint": "POST /pets",
+        "detail": "POST /pets no longer returns HTTP 201.",
+        "migration": "Manual review: check whether clients branch on this status code and what replaced it.",
+        "from": "201",
+        "to": null
+      },
+      {
+        "review": false,
+        "kind": "additive",
+        "type": "response_field_added",
+        "endpoint": "POST /pets",
+        "detail": "New response field \"name\" on POST /pets.",
+        "migration": "Optional: adopt when useful.",
+        "from": null,
+        "to": "name"
+      },
+      {
+        "review": false,
+        "kind": "additive",
+        "type": "response_field_added",
+        "endpoint": "POST /pets",
+        "detail": "New response field \"tag\" on POST /pets.",
+        "migration": "Optional: adopt when useful.",
+        "from": null,
+        "to": "tag"
+      },
+      {
+        "review": false,
+        "kind": "additive",
+        "type": "response_field_added",
+        "endpoint": "POST /pets",
+        "detail": "New response field \"id\" on POST /pets.",
+        "migration": "Optional: adopt when useful.",
+        "from": null,
+        "to": "id"
+      },
+      {
+        "review": true,
+        "kind": "breaking",
+        "type": "request_field_removed",
+        "endpoint": "POST /pets",
+        "detail": "Request field \"id\" was removed from POST /pets.",
+        "migration": "Manual review: stop sending this field; check whether the API now rejects or ignores it.",
+        "from": "id",
+        "to": null
+      },
+      {
+        "review": true,
+        "kind": "breaking",
+        "type": "endpoint_removed",
+        "endpoint": "GET /pets/{petId}",
+        "detail": "GET /pets/{petId} no longer exists in v1.0.0.",
+        "migration": "Manual review: no direct replacement. Check whether another endpoint covers this workflow."
+      },
+      {
+        "review": false,
+        "kind": "additive",
+        "type": "endpoint_added",
+        "endpoint": "GET /pets/{id}",
+        "detail": "New endpoint GET /pets/{id} is available.",
+        "migration": "Optional: adopt when useful.",
+        "from": null,
+        "to": "GET /pets/{id}"
+      },
+      {
+        "review": false,
+        "kind": "additive",
+        "type": "endpoint_added",
+        "endpoint": "DELETE /pets/{id}",
+        "detail": "New endpoint DELETE /pets/{id} is available.",
+        "migration": "Optional: adopt when useful.",
+        "from": null,
+        "to": "DELETE /pets/{id}"
+      }
+    ]
+  },
+  "error": null,
+  "truncated": false
+}
